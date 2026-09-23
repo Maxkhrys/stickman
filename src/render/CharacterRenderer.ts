@@ -339,7 +339,7 @@ export class CharacterRenderer {
     const rad = Math.hypot(or, of), maxR = BONES[bone][2];
     if (rad > maxR) { or *= maxR / rad; of *= maxR / rad; }
     if (c.wounds.length >= SAND.maxWounds) c.wounds.shift();
-    c.wounds.push({ bone, t: bestT, or, of, life: SAND.woundLife, tick: 0 });
+    c.wounds.push({ bone, t: bestT, or, of, life: SAND.woundLife, tick: 1 }); // leaks from the first frame
   }
 
   /** Current world position of a wound on the posed skeleton. */
@@ -571,7 +571,7 @@ export class CharacterRenderer {
     for (const w of c.wounds) {
       w.life -= dt;
       w.tick += dt;
-      if (w.tick < SAND.trickleInterval / Math.max(0.35, detail) || w.life <= 0) continue;
+      if (w.tick < SAND.trickleInterval / Math.max(0.5, detail) || w.life <= 0) continue; // wounds always leak (feedback)
       w.tick = 0;
       const p = this.woundPos(c, w, new THREE.Vector3());
       const fr = boneFrame(c.sk, w.bone);

@@ -10,6 +10,7 @@ import type { Effects } from './Effects';
 import { makeBlobTexture } from './textures';
 import { buildTpGuns } from './tpGuns';
 import { toonGradient } from './vm/kit';
+import { SAND, sandMaterial } from './sand';
 
 // ============================================================================
 //  Instanced characters. Every body part of every character goes through a
@@ -138,6 +139,11 @@ interface CharState {
   rest: number[];
   headPop: boolean;
   blinkT: number;
+  wounds: { joint: JName; offset: THREE.Vector3; yaw: number; life: number; tick: number }[];
+  forming: number;
+  deathDir: THREE.Vector3;
+  deathPulse: number;
+  weaponTick: number;
 }
 
 const J = ['pelvis', 'chest', 'neck', 'head', 'lShoulder', 'rShoulder', 'lElbow', 'rElbow', 'lHand', 'rHand', 'lHip', 'rHip', 'lKnee', 'rKnee', 'lAnkle', 'rAnkle', 'lToe', 'rToe'] as const;
@@ -185,14 +191,15 @@ export class CharacterRenderer {
   private time = 0;
   private lineT = 0.018;
   private camPos = new THREE.Vector3();
+  private structure = 1;
 
   constructor(private effects: Effects, maxChars = 12) {
-    const toonMat = () => new THREE.MeshToonMaterial({ color: 0xffffff, gradientMap: toonGradient() });
+    const toonMat = () => sandMaterial(new THREE.MeshToonMaterial({ color: 0xffffff, gradientMap: toonGradient() }));
     const lineMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.BackSide });
     const guns = buildTpGuns();
     const face = makeFaceTexture();
-    const headMat = new THREE.MeshToonMaterial({ color: 0xffffff, gradientMap: toonGradient(), map: face });
-    const gunMat = new THREE.MeshToonMaterial({ color: 0xffffff, gradientMap: toonGradient(), vertexColors: true });
+    const headMat = sandMaterial(new THREE.MeshToonMaterial({ color: 0xffffff, gradientMap: toonGradient(), map: face }));
+    const gunMat = sandMaterial(new THREE.MeshToonMaterial({ color: 0xffffff, gradientMap: toonGradient(), vertexColors: true }));
     const cyl = new THREE.CylinderGeometry(1, 1, 1, 10);
     const dome = new THREE.SphereGeometry(1, 14, 7, 0, Math.PI * 2, 0, Math.PI / 2);
     const defs: [PrimId, THREE.BufferGeometry, THREE.Material, number][] = [
@@ -230,6 +237,24 @@ export class CharacterRenderer {
     this.chars.clear();
   }
 
+  /** Attach to the nearest moving joint in its yaw-local frame; max four active wounds. */
+  wound(id: number, pos: Vec3, yaw: number) {
+    if (!SAND.enabled) return;
+    const c = this.chars.get(id);
+    if (!c || c.dead) return;
+    let joint: JName = 'chest';
+    let best = Infinity;
+    for (const name of J) {
+      const p = c.sk[name] as Vec3;
+      const d = (p.x - pos.x) ** 2 + (p.y - pos.y) ** 2 + (p.z - pos.z) ** 2;
+      if (d < best) { best = d; joint = name; }
+    }
+    const p = c.sk[joint] as Vec3;
+    const dx = pos.x - p.x, dz = pos.z - p.z;
+    if (c.wounds.length >= SAND.maxWounds) c.wounds.shift();
+    c.wounds.push({ joint, offset: new THREE.Vector3(dx * Math.cos(yaw) - dz * Math.sin(yaw), pos.y - p.y, dx * Math.sin(yaw) + dz * Math.cos(yaw)), yaw, life: SAND.woundLife, tick: 0 });
+  }
+
   private stateOf(f: Fighter): CharState {
     let c = this.chars.get(f.id);
     if (!c) {
@@ -248,6 +273,7 @@ export class CharacterRenderer {
         rest: [],
         headPop: false,
         blinkT: Math.random() * 4,
+        wounds: [], forming: 0, deathDir: new THREE.Vector3(), deathPulse: 0, weaponTick: 0,
       };
       this.chars.set(f.id, c);
     }
@@ -270,6 +296,9 @@ export class CharacterRenderer {
     c.deadT = 0;
     c.burst = false;
     c.headPop = headshot;
+    c.wounds.length = 0;
+    c.deathDir.set(dir.x, dir.y, dir.z);
+    c.deathPulse = 0;
     const sk = c.sk;
     c.rp = J.map((n) => V(sk[n] as Vec3));
     const imp = new THREE.Vector3(dir.x, Math.max(0.2, dir.y), dir.z).multiplyScalar(5);
@@ -284,6 +313,7 @@ export class CharacterRenderer {
 
   private emit(prim: PrimId, p: THREE.Vector3, q: THREE.Quaternion, s: THREE.Vector3, color: THREE.Color, outline: 'uniform' | 'box' | 'cyl' | 'none', line: THREE.Color) {
     const t = this.lineT;
+    if (SAND.enabled && this.structure < 1) s.multiplyScalar(this.structure);
     let ls: THREE.Vector3 | null = null;
     if (outline === 'uniform') ls = tls.set(s.x + t, s.y + t, s.z + t);
     else if (outline === 'box') ls = tls.set(s.x + 2 * t, s.y + 2 * t, s.z + 2 * t);
@@ -323,30 +353,63 @@ export class CharacterRenderer {
       if (f.alive && c.dead) {
         c.dead = false;
         c.burst = false;
+        c.forming = 0.28;
+        c.wounds.length = 0;
       }
+      c.forming = Math.max(0, c.forming - dt);
       c.hurtT = Math.max(0, c.hurtT - dt);
       if (!f.alive && !c.dead) this.kill(f, { x: 0, y: 0, z: 0 }, false);
       if (c.dead) {
         this.stepRagdoll(c, dt, world);
-        if (!c.burst && c.deadT > 0.75) {
+        if (SAND.enabled && c.deadT > 0.12 && c.deadT < SAND.collapseTime && c.deadT - c.deathPulse > 0.105) {
+          c.deathPulse = c.deadT;
+          const source = c.rp[c.headPop ? JI.head : JI.chest];
+          const point = source.clone().lerp(c.rp[JI.pelvis], c.deadT / SAND.collapseTime * 0.65);
+          this.effects.sandBurst(point, f.color, 12, 2.6, c.deathDir, SAND.pileLife);
+        }
+        if (!c.burst && c.deadT > SAND.collapseTime) {
           c.burst = true;
           const center = c.rp[JI.chest].clone().lerp(c.rp[JI.pelvis], 0.5);
-          this.effects.burst(center, f.color, 26, 5.5, 0.09, 0.7, 1);
-          this.effects.burst(center, c.outfit.body, 20, 4.5, 0.08, 0.7, 1);
-          this.effects.burst(center, 0x14141c, 14, 6, 0.06, 0.6, 1);
+          if (SAND.enabled) this.effects.sandBurst(center, f.color, 30, 2.4, c.deathDir, SAND.pileLife);
+          else {
+            this.effects.burst(center, f.color, 26, 5.5, 0.09, 0.7, 1);
+            this.effects.burst(center, c.outfit.body, 20, 4.5, 0.08, 0.7, 1);
+            this.effects.burst(center, 0x14141c, 14, 6, 0.06, 0.6, 1);
+          }
         }
         if (c.burst) continue;
         this.fromRagdoll(c);
       } else {
         if (firstPerson) continue;
         this.pose(f, c, alpha, time);
+        if (SAND.enabled) {
+          c.weaponTick += dt;
+          if (c.weaponTick > 0.075 && (f.switchTimer > 0 || f.reloadTimer > 0)) {
+            c.weaponTick = 0;
+            const hand = c.sk.rHand;
+            this.effects.sandBurst(new THREE.Vector3(hand.x, hand.y, hand.z), f.color, 3, 0.35, undefined, 0.28);
+          }
+        }
+        if (SAND.enabled) for (const w of c.wounds) {
+          w.life -= dt;
+          w.tick += dt;
+          if (w.tick < SAND.trickleInterval || w.life <= 0) continue;
+          w.tick = 0;
+          const joint = c.sk[w.joint] as Vec3;
+          const yaw = f.yaw;
+          const p = new THREE.Vector3(joint.x + w.offset.x * Math.cos(yaw) + w.offset.z * Math.sin(yaw), joint.y + w.offset.y, joint.z - w.offset.x * Math.sin(yaw) + w.offset.z * Math.cos(yaw));
+          this.effects.sandBurst(p, f.color, 2, 0.48, undefined, 1.2);
+        }
+        c.wounds = c.wounds.filter((w) => w.life > 0);
       }
       // line thickness grows with distance so outlines stay readable
       const d = this.camPos.distanceTo(V(c.sk.pelvis, tv));
       this.lineT = Math.min(0.045, Math.max(0.014, d * 0.0021));
       const protectedPulse = f.spawnProtect > 0 ? 0.5 + 0.5 * Math.sin(this.time * 14) : 0;
       const line = tc.copy(INK).lerp(PROTECT, protectedPulse);
+      this.structure = SAND.enabled ? c.dead ? Math.max(0.06, 1 - Math.max(0, c.deadT - 0.17) / (SAND.collapseTime - 0.17)) : 1 - c.forming / 0.28 * 0.72 : 1;
       this.drawBody(f, c, line.clone(), time);
+      this.structure = 1;
       if (!c.dead) {
         const floor = world.surfaceBelow(c.sk.pelvis.x, c.sk.pelvis.z, 0.2, f.pos.y + 0.1);
         const above = f.pos.y - floor;
@@ -359,6 +422,7 @@ export class CharacterRenderer {
     this.shadows.count = shadowN;
     this.shadows.instanceMatrix.needsUpdate = true;
     this.shadowN = shadowN;
+    for (const [id] of this.chars) if (!fighters.some((f) => f.id === id)) this.chars.delete(id);
   }
 
   private pose(f: Fighter, c: CharState, a: number, time: number) {
@@ -441,9 +505,9 @@ export class CharacterRenderer {
   private drawBody(f: Fighter, c: CharState, line: THREE.Color, time: number) {
     const sk = c.sk;
     const o = c.outfit;
-    const body = tc.set(o.body).clone();
-    const pants = new THREE.Color(o.pants);
-    const glove = new THREE.Color(0xfbfbf7);
+    const body = tc.set(SAND.enabled ? f.color : o.body).clone().multiplyScalar(SAND.enabled ? 0.73 : 1);
+    const pants = new THREE.Color(SAND.enabled ? f.color : o.pants).multiplyScalar(SAND.enabled ? 0.58 : 1);
+    const glove = new THREE.Color(SAND.enabled ? f.color : 0xfbfbf7).multiplyScalar(SAND.enabled ? 0.92 : 1);
     const head = c.head.clone();
     if (c.hurtT > 0.12) head.lerp(WHITE, 0.75);
     const accent = c.head.clone();
@@ -516,7 +580,7 @@ export class CharacterRenderer {
       this.emit('box', mid, qF, ts.set(0.12, 0.085, 0.24), accent, 'box', line);
     }
     // backpack
-    if (o.backpack) {
+    if (o.backpack && !SAND.enabled) {
       const back = chest.clone().addScaledVector(up, -0.2).addScaledVector(V(sk.upperFwd, tv2), -0.18);
       this.emit('box', back, qT, ts.set(0.3, 0.32, 0.14), accent.clone().multiplyScalar(0.8), 'box', line);
     }
@@ -526,7 +590,8 @@ export class CharacterRenderer {
       const qG = new THREE.Quaternion().setFromEuler(new THREE.Euler(f.pitch, f.yaw, 0, 'YXZ'));
       const reload = f.reloadTimer > 0 ? Math.sin(Math.min(1, 1 - f.reloadTimer / Math.max(0.01, WEAPONS[w].reloadTime)) * Math.PI) : 0;
       if (reload > 0) qG.multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(0.25 * reload, 0, 0.6 * reload)));
-      this.emit(`gun_${w}` as PrimId, rH, qG, ts.set(1, 1, 1), WHITE, 'uniform', line);
+      const formed = SAND.enabled ? Math.max(0.16, 1 - Math.min(1, f.switchTimer / Math.max(0.01, WEAPONS[w].drawTime)) * 0.84) : 1;
+      this.emit(`gun_${w}` as PrimId, rH, qG, ts.set(formed, formed, formed), WHITE, 'uniform', line);
     }
     void time;
   }

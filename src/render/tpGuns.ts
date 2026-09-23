@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { WeaponId } from '../sim/types';
 import { PAL } from './vm/kit';
+import { SAND } from './sand';
 
 // Third-person weapons: simplified versions of the viewmodels, merged into ONE geometry per weapon
 // with baked vertex colours so every character's gun is a single instanced draw.
@@ -19,6 +20,11 @@ function bake(pieces: Piece[]): THREE.BufferGeometry {
     m.compose(new THREE.Vector3(...p.pos), new THREE.Quaternion().setFromEuler(new THREE.Euler(...(p.rot ?? [0, 0, 0]))), new THREE.Vector3(1, 1, 1));
     g.applyMatrix4(m);
     c.set(p.color);
+    if (SAND.enabled) {
+      const hsl = { h: 0, s: 0, l: 0 };
+      c.getHSL(hsl);
+      c.setHSL(hsl.h, Math.min(0.43, hsl.s * 0.3 + 0.09), Math.max(0.16, Math.min(0.74, hsl.l * 0.7 + 0.13)));
+    }
     const n = g.getAttribute('position').count;
     const col = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) {

@@ -4,6 +4,7 @@ import { makeFlashTexture, makeSmokeTexture } from './textures';
 import { buildLeftGlove, buildRightGlove, buildSleeve, type HandRig } from './vm/hands';
 import { bump, clamp01, seg } from './vm/kit';
 import { buildWeaponRigs, type WeaponRig } from './vm/weapons';
+import { SAND, mineralizeRig } from './sand';
 
 class Spring {
   x = 0;
@@ -106,6 +107,9 @@ export class Viewmodel {
   private puffIdx = 0;
   private droppedMag: { obj: THREE.Object3D; t: number } | null = null;
   private magDropClones = new Map<WeaponId, THREE.Object3D>();
+  private formation = new Map<WeaponId, THREE.InstancedMesh>();
+  private formationDummy = new THREE.Object3D();
+  private solidParts = new Map<WeaponId, { mesh: THREE.Mesh; scale: THREE.Vector3 }[]>();
   /** last computed muzzle position in viewmodel camera space */
   readonly muzzleVM = new THREE.Vector3();
   /** eased ADS used for this frame (exposed for sensitivity / HUD sync) */
@@ -127,6 +131,18 @@ export class Viewmodel {
     this.scene.add(key);
     this.rigs = buildWeaponRigs();
     for (const r of Object.values(this.rigs)) {
+      if (SAND.enabled) {
+        mineralizeRig(r.root);
+        const parts: { mesh: THREE.Mesh; scale: THREE.Vector3 }[] = [];
+        r.root.traverse((o) => { if (o instanceof THREE.Mesh && o.name !== 'outline' && !/lens|glass|reticle/i.test(o.name)) parts.push({ mesh: o, scale: o.scale.clone() }); });
+        this.solidParts.set(r.id, parts);
+        const grains = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.0028, 0), new THREE.MeshBasicMaterial({ color: 0xb5a2a0 }), 56);
+        grains.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+        grains.frustumCulled = false;
+        grains.count = 0;
+        r.root.add(grains);
+        this.formation.set(r.id, grains);
+      }
       r.root.visible = false;
       this.scene.add(r.root);
       if (r.parts.mag) {
@@ -141,6 +157,7 @@ export class Viewmodel {
     this.handR = buildRightGlove();
     this.handL = buildLeftGlove();
     this.scene.add(this.handR.group, this.handL.group, this.sleeveR, this.sleeveL);
+    if (SAND.enabled) for (const g of [this.handR.group, this.handL.group, this.sleeveR, this.sleeveL]) mineralizeRig(g);
     const flashTex = makeFlashTexture();
     this.flash = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
     this.flashCore = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTex, color: 0xfff6d0, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
@@ -216,6 +233,25 @@ export class Viewmodel {
     const rig = this.rigFor(this.cur);
     const visible = s.alive && s.scopeCover < 0.999;
     rig.root.visible = visible;
+    if (SAND.enabled) {
+      // Existing draw timer is authoritative. Sights and sockets never move from their ADS alignment.
+      const compact = Math.max(0.12, 1 - Math.min(1, s.drawProgress) * (s.weapon === 'sniper' ? 0.88 : 0.72));
+      for (const p of this.solidParts.get(this.cur) ?? []) p.mesh.scale.copy(p.scale).multiplyScalar(compact);
+      const grains = this.formation.get(this.cur)!;
+      const activity = Math.max(s.drawProgress, s.reloadProgress >= 0 ? Math.sin(s.reloadProgress * Math.PI) * 0.85 : 0, s.boltProgress >= 0 ? Math.sin(s.boltProgress * Math.PI) * 0.45 : 0);
+      const count = visible && s.ads < 0.45 ? Math.min(56, Math.floor(activity * 56)) : 0;
+      grains.count = count;
+      for (let i = 0; i < count; i++) {
+        const t = ((i * 0.61803398875 + this.time * (s.reloadProgress >= 0 ? 1.8 : 2.8)) % 1);
+        const r = (i % 7) / 7;
+        // Stream stays under the sight line; sniper extends farther along the barrel.
+        this.formationDummy.position.set(Math.sin(i * 17.1) * 0.015 * r, -0.065 + t * 0.09, 0.08 - t * (s.weapon === 'sniper' ? 0.6 : s.weapon === 'pistol' ? 0.15 : 0.32));
+        this.formationDummy.scale.setScalar(0.65 + (i % 4) * 0.15);
+        this.formationDummy.updateMatrix();
+        grains.setMatrixAt(i, this.formationDummy.matrix);
+      }
+      if (count) grains.instanceMatrix.needsUpdate = true;
+    }
     this.handR.group.visible = this.handL.group.visible = visible;
     this.sleeveR.visible = this.sleeveL.visible = visible;
     if (!s.alive) {

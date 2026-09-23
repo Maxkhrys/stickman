@@ -21,6 +21,7 @@ export class Input {
   onToggleHitboxes: (() => void) | null = null;
   onToggleCamera: (() => void) | null = null;
   onSwapShoulder: (() => void) | null = null;
+  private requestingLock = false;
   private held = new Set<string>();
   private latched = new Set<string>();
   private scrollAcc = 0;
@@ -40,7 +41,7 @@ export class Input {
       }
     });
     // browsers refuse re-locking for ~1s after Esc: fall back to the pause menu instead of a dead state
-    document.addEventListener('pointerlockerror', () => this.onPauseRequest?.());
+    document.addEventListener('pointerlockerror', () => { if (!this.requestingLock) this.onPauseRequest?.(); });
     document.addEventListener('mousemove', (e) => {
       if (!this.locked) return;
       const s = BASE_SENS * this.settings.sensitivity * this.sensScale;
@@ -113,6 +114,8 @@ export class Input {
   }
 
   async lock() {
+    if (this.requestingLock) return;
+    this.requestingLock = true;
     try {
       // unadjustedMovement = raw input (no OS acceleration) where supported
       await (this.canvas.requestPointerLock as (o?: object) => Promise<void>).call(this.canvas, { unadjustedMovement: true });
@@ -120,8 +123,10 @@ export class Input {
       try {
         await (this.canvas.requestPointerLock as () => Promise<void> | void).call(this.canvas);
       } catch {
-        /* user must click again (browser cooldown after Esc) */
+        this.onPauseRequest?.(); // fallback also failed; show a resumable pause screen
       }
+    } finally {
+      this.requestingLock = false;
     }
   }
 

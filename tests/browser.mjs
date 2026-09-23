@@ -2,7 +2,7 @@ import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 await mkdir('verification', { recursive: true });
-const browser = await chromium.launch({ args: ['--no-sandbox', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+const browser = await chromium.launch({ headless: !process.env.DISPLAY, args: ['--no-sandbox', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
 const errors = [];
 const checks = [];
@@ -62,7 +62,7 @@ try {
   check('New map, equipped weapon and character loaded', await page.evaluate(() => { const a = window.stickfight; const f = a.adapter.fighters()[0]; return a.adapter.map().name === 'Bookyard' && f.weapons[0].id === 'smg' && f.color === 0x22c6e0; }));
   // Inspect objective at center, then let real match rules finish a short deterministic round.
   await page.evaluate(() => { const a = window.stickfight; const m = a.adapter.match; m.fighters[0].pos = { x: 0, y: 0, z: 3 }; m.fighters[0].prevPos = { ...m.fighters[0].pos }; for (const f of m.fighters.slice(1)) { f.alive = false; f.respawnTimer = 9999; } });
-  await page.waitForTimeout(1200); await draw();
+  await page.waitForFunction(() => window.stickfight.adapter.fighters()[0].stats.objective >= 1, null, { timeout: 20000 }); await draw();
   await page.screenshot({ path: 'verification/bookyard-objective.png' });
   check('Objective scores and HUD shows state', await page.evaluate(() => window.stickfight.adapter.fighters()[0].stats.objective >= 1 && document.querySelector('.objective-panel').textContent.includes('SCORING')));
   await page.evaluate(() => { window.stickfight.adapter.match.opts.scoreLimit = 2; });
@@ -78,6 +78,10 @@ try {
   await page.screenshot({ path: 'verification/armory-mobile.png' });
   check('Mobile armory fits viewport', await page.locator('.armory-sheet').evaluate(e => e.scrollWidth <= e.clientWidth + 1 && e.getBoundingClientRect().right <= innerWidth));
   check('No runtime errors', errors.length === 0);
+} catch (error) {
+  console.log('BROWSER DIAGNOSTIC', await page.evaluate(() => ({ state: window.stickfight?.state, locked: window.stickfight?.input.locked, lockElement: document.pointerLockElement?.tagName, errors: document.body.innerText.slice(0,1200) })));
+  await page.screenshot({ path: 'verification/failure.png' }).catch(() => {});
+  throw error;
 } finally {
   await writeFile('verification/report.json', JSON.stringify({ checks, errors }, null, 2));
   await browser.close();

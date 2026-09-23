@@ -160,7 +160,7 @@ export function updateWeapon(ctx: SimContext, f: Fighter, cmd: InputCommand, dt:
   // ---------------- fire ----------------
   if (pressed & BTN.FIRE && !f.fireLock) f.fireQueuedAt = ctx.time;
   const want = !f.fireLock && (def.auto ? (held & BTN.FIRE) !== 0 : ctx.time - f.fireQueuedAt < 0.15);
-  const ready = !drawing && !reloading && slot.boltLeft <= 0 && f.fireCooldown <= 1e-6;
+  const ready = !drawing && f.reloadTimer <= 0 && slot.boltLeft <= 0 && f.fireCooldown <= 1e-6;
   if (want && ready) {
     if (slot.mag <= 0) {
       if (pressed & BTN.FIRE) ctx.events.push({ type: 'dryfire', id: f.id });

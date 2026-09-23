@@ -44,6 +44,7 @@ export interface MapDef {
   spawns: SpawnPoint[];
   dummies: DummyDef[];
   props: Prop[];
+  capturePoints?: Vec3[];
   labels?: { pos: Vec3; text: string }[];
 }
 
@@ -278,7 +279,39 @@ function buildRange(): MapDef {
   };
 }
 
+/** Three lanes around a low central plaza. Book stacks break long diagonals;
+ * parallel ruler walks reconnect the side routes without trapping spawns. */
+function buildBookyard(): MapDef {
+  const boxes: Box[] = [
+    B(0, -25.5, 74, 1, 6, C.wall), B(0, 25.5, 74, 1, 6, C.wall),
+    B(-36.5, 0, 1, 52, 6, C.wall), B(36.5, 0, 1, 52, 6, C.wall),
+  ];
+  const ramps: Ramp[] = [];
+  for (const side of [-1, 1]) {
+    for (const x of [-24, -10, 10, 24]) {
+      boxes.push(B(x, side * 8, 8, 2, 3.4, side > 0 ? C.blue : C.green));
+      boxes.push(B(x + 0.25, side * 8, 7.8, 2.1, 0.18, C.wall, 1.45));
+    }
+    for (const x of [-27, 27]) boxes.push(B(x, side * 19, 3.5, 2.4, 1.2, C.crate));
+    // Solid elevated walks keep collision, visibility and the waypoint graph consistent.
+    boxes.push(B(0, side * 18, 16, 3, 2, C.yellow));
+    ramps.push({ x0: -16, x1: -8, z0: side * 18 - 1.5, z1: side * 18 + 1.5, axis: 'x', h0: 0, h1: 2, color: C.yellow });
+    ramps.push({ x0: 8, x1: 16, z0: side * 18 - 1.5, z1: side * 18 + 1.5, axis: 'x', h0: 2, h1: 0, color: C.yellow });
+    boxes.push(B(side * 10, 0, 2, 3, 1.25, C.teal));
+    boxes.push(B(side * 30, 1, 2, 5, 2.6, C.orange));
+  }
+  return {
+    name: 'Bookyard', bounds: { minX: -36, maxX: 36, minZ: -25, maxZ: 25 },
+    floorColor: 0xf0ede4, skyColor: 0xe1f2ee, fogColor: 0xe1f2ee,
+    boxes, ramps, props: [], dummies: [],
+    spawns: [spawn(-33, -20), spawn(-33, 20), spawn(33, -20), spawn(33, 20), spawn(-20, 22), spawn(20, -22), spawn(-33, 0), spawn(33, 0)],
+    capturePoints: [v3(0, 0, 0), v3(-21, 0, 15), v3(21, 0, -15)],
+    labels: [{ pos: v3(0, 5, -25), text: 'BOOKYARD' }, { pos: v3(0, 2.02, 18), text: 'RULER WALK' }],
+  };
+}
+
 export const MAPS = {
-  arena: buildArena(),
+  arena: { ...buildArena(), capturePoints: [v3(0, 2.4, 0), v3(-18, 0, -20), v3(18, 0, 20)] },
+  bookyard: buildBookyard(),
   range: buildRange(),
 };

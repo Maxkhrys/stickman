@@ -19,14 +19,14 @@ export interface TraceResult {
 }
 
 /** Hitscan trace against world + every living fighter except the shooter. */
-export function traceShot(ctx: SimContext, shooter: Fighter, o: Vec3, d: Vec3, range: number): TraceResult {
+export function traceShot(ctx: { world: SimContext['world']; fighters: readonly Fighter[] }, shooter: Fighter, o: Vec3, d: Vec3, range: number): TraceResult {
   const wh = ctx.world.raycast(o, d, range);
   let bestT = wh ? wh.t : range;
   let normal = wh ? wh.normal : null;
   let hitF: Fighter | null = null;
   let part: HitPart | null = null;
   for (const f of ctx.fighters) {
-    if (f === shooter || !f.alive) continue;
+    if (f.id === shooter.id || !f.alive) continue;
     // broadphase: distance from ray to the fighter's centre
     const cx = f.pos.x - o.x, cy = f.pos.y + 0.9 - o.y, cz = f.pos.z - o.z;
     const along = cx * d.x + cy * d.y + cz * d.z;
@@ -147,20 +147,10 @@ const OBSTRUCTION_RANGE = 1.8;
  * One shot. Everything (ammo is handled by the caller) - damage, recoil, and the single 'shot' event that
  * drives muzzle flash, tracer, sound and impact - happens here in the same tick.
  */
-export function fireHitscan(ctx: SimContext, f: Fighter, def: WeaponDef) {
+export function traceFireLine(ctx: { world: SimContext['world']; fighters: readonly Fighter[] }, f: Fighter, dir: Vec3) {
   const eye = eyePos(f);
-  const spread = computeSpread(f);
-  const a = ctx.rng() * Math.PI * 2;
-  const r = Math.sqrt(ctx.rng()) * spread;
-  const aim = aimAngles(f, ctx.time);
-  const dir = offsetDir(aim.yaw, aim.pitch, Math.cos(a) * r, Math.sin(a) * r);
+  const def = WEAPONS[f.weapons[f.cur].id];
   let tr = traceShot(ctx, f, eye, dir, def.range);
-  f.stats.shots++;
-  if (f.spawnProtect > 0) {
-    f.spawnProtect = 0;
-    ctx.events.push({ type: 'protectEnd', id: f.id });
-  }
-
   // Barrel obstruction: the camera may see over a ledge the gun is still behind.
   const muzzle = muzzlePos(f);
   let obstructed = false;
@@ -183,6 +173,22 @@ export function fireHitscan(ctx: SimContext, f: Fighter, def: WeaponDef) {
         tr = { t: block.t, point: vaddScaled(muzzle, md, block.t), normal: block.normal, fighter: null, part: null };
       }
     }
+  }
+
+  return { tr, muzzle, obstructed };
+}
+
+export function fireHitscan(ctx: SimContext, f: Fighter, def: WeaponDef) {
+  const spread = computeSpread(f);
+  const a = ctx.rng() * Math.PI * 2;
+  const r = Math.sqrt(ctx.rng()) * spread;
+  const aim = aimAngles(f, ctx.time);
+  const dir = offsetDir(aim.yaw, aim.pitch, Math.cos(a) * r, Math.sin(a) * r);
+  const { tr, muzzle, obstructed } = traceFireLine(ctx, f, dir);
+  f.stats.shots++;
+  if (f.spawnProtect > 0) {
+    f.spawnProtect = 0;
+    ctx.events.push({ type: 'protectEnd', id: f.id });
   }
 
   ctx.events.push({

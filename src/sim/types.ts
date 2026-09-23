@@ -34,9 +34,9 @@ export function emptyCommand(seq = 0): InputCommand {
 
 /** Hit regions. chest = upper torso + neck, stomach = lower torso + pelvis. */
 export type HitPart = 'head' | 'chest' | 'stomach' | 'limb';
-export type WeaponId = 'ar' | 'sniper' | 'pistol' | 'melee';
+export type WeaponId = 'ar' | 'sniper' | 'pistol' | 'melee' | 'smg' | 'carbine';
 export type Difficulty = 'easy' | 'normal' | 'hard';
-export type GameMode = 'ffa' | 'range';
+export type GameMode = 'ffa' | 'range' | 'sketch';
 
 /** Everything that happens in the sim is reported as events. Renderer/audio/HUD only consume these + state. */
 export type GameEvent =

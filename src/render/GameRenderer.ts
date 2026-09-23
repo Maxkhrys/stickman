@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+import { ObjectiveMarker } from './ObjectiveMarker';
+import type { ObjectiveInfo } from '../sim/match';
+import { clipCamera } from './thirdPerson';
 import { MOVE } from '../config/movement';
 import { WEAPONS } from '../config/weapons';
 import { kickAt, type Fighter } from '../sim/fighter';
@@ -41,6 +44,9 @@ export interface FrameInput {
   spectateId: number;
   /** menu backdrop: slow orbit over the arena, no viewmodel */
   orbit?: boolean;
+  objective?: ObjectiveInfo | null;
+  thirdPerson?: boolean;
+  shoulder?: -1 | 1;
   /** death cam target (killer position) */
   deathLook?: { x: number; y: number; z: number } | null;
 }
@@ -68,6 +74,7 @@ export class GameRenderer {
   readonly scene = new THREE.Scene();
   readonly camera: THREE.PerspectiveCamera;
   readonly effects = new Effects();
+  readonly objective = new ObjectiveMarker();
   readonly viewmodel = new Viewmodel();
   readonly characters: CharacterRenderer;
   readonly hitboxes = new HitboxDebug();
@@ -88,6 +95,8 @@ export class GameRenderer {
   motionScale = 1;
   fovKickOn = true;
   private hitStopT = 0;
+  thirdPersonActive = false;
+  private shoulderOffset = 0.8;
   private rings: THREE.Object3D[] = [];
   readonly zoom: ZoomInfo = { vfov: 1, baseVfov: 1, adsE: 0, scopeCover: 0, eyepiece: null };
   /** live scope image for the sniper eyepiece while it approaches the eye */
@@ -108,7 +117,7 @@ export class GameRenderer {
     sun.position.set(0.4, 1, 0.25);
     this.scene.add(sun);
     this.characters = new CharacterRenderer(this.effects);
-    this.scene.add(this.characters.group, this.effects.group, this.hitboxes.group);
+    this.scene.add(this.characters.group, this.effects.group, this.hitboxes.group, this.objective.group);
     this.resize();
   }
 
@@ -191,6 +200,7 @@ export class GameRenderer {
     const renderTime = fi.time + a * fi.tickDt;
 
     // ---------------- camera ----------------
+    this.thirdPersonActive = false;
     const me = fi.orbit ? undefined : fi.fighters.find((f) => f.id === fi.spectateId);
     const baseV = 2 * Math.atan(Math.tan((fi.hfov * Math.PI) / 360) / this.camera.aspect);
     this.zoom.baseVfov = baseV;
@@ -253,6 +263,26 @@ export class GameRenderer {
         this.camera.rotation.set(-0.5, fi.viewYaw, 0.2);
       }
 
+      // Camera is presentation only. Aim remains the fighter's eye ray and the HUD
+      // projects its actual impact, so shoulder peeking never creates a camera-origin shot.
+      this.thirdPersonActive = !!fi.thirdPerson && me.alive && !(def.scope && ads > 0.05);
+      if (this.thirdPersonActive) {
+        const side = (fi.shoulder ?? 1) * (0.8 - adsE * 0.35);
+        this.shoulderOffset += (side - this.shoulderOffset) * (1 - Math.exp(-16 * dt));
+        const back = 3.25 - adsE * 1.6;
+        const pivot = { x: px, y: py + this.eyeH, z: pz };
+        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+        const desired = {
+          x: pivot.x - forward.x * back + cy * this.shoulderOffset,
+          y: pivot.y - forward.y * back + 0.22,
+          z: pivot.z - forward.z * back - sy * this.shoulderOffset,
+        };
+        const safe = clipCamera(world, pivot, desired);
+        this.camera.position.set(safe.x, safe.y, safe.z);
+        // Hide the local body if a wall forces the camera into it.
+        if (Math.hypot(safe.x - px, safe.z - pz) < 0.55) { this.thirdPersonActive = false; this.camera.position.set(px + bobX * cy, camY, pz - bobX * sy); }
+      }
+
       // ---- FOV: speed kick at hip, iron-sight zoom, scope zoom synced with the overlay ----
       const speedKick = Math.max(0, Math.min(1, (hs - MOVE.maxSpeed * 0.9) / 6));
       const targetKick = this.fovKickOn ? (speedKick * 7 + (me.sliding ? 5 : 0)) * (1 - adsE) : 0;
@@ -305,9 +335,10 @@ export class GameRenderer {
       this.zoom.eyepiece = this.viewmodel.eyepiece;
     }
     this.camera.updateMatrixWorld();
+    this.objective.update(fi.objective, fi.localId);
 
     // ---------------- world ----------------
-    this.characters.update(worldDt, fi.fighters, a, renderTime, fi.orbit ? -1 : fi.spectateId, world, this.camera);
+    this.characters.update(worldDt, fi.fighters, a, renderTime, fi.orbit || this.thirdPersonActive ? -1 : fi.spectateId, world, this.camera);
     this.hitboxes.update(fi.fighters, fi.spectateId);
     this.effects.camPos.copy(this.camera.position);
     this.effects.update(worldDt);
@@ -316,7 +347,7 @@ export class GameRenderer {
     // full-screen scope shows inside a circle of the same on-screen size, so the hand-off is seamless
     const lens = this.viewmodel.scopeLens;
     const ep = this.zoom.eyepiece;
-    const sniperUp = !!me && me.alive && me.weapons[me.cur].id === 'sniper' && this.zoom.adsE > 0.02 && this.zoom.scopeCover < 0.999 && !!ep;
+    const sniperUp = !this.thirdPersonActive && !!me && me.alive && me.weapons[me.cur].id === 'sniper' && this.zoom.adsE > 0.02 && this.zoom.scopeCover < 0.999 && !!ep;
     if (sniperUp && ep) {
       if (!this.lensDark) this.lensDark = lens.material as THREE.Material;
       lens.material = this.lensMat;
@@ -336,7 +367,7 @@ export class GameRenderer {
 
     this.renderer.clear();
     this.renderer.render(this.scene, this.camera);
-    if (me && this.zoom.scopeCover < 0.999) {
+    if (me && !this.thirdPersonActive && this.zoom.scopeCover < 0.999) {
       this.renderer.clearDepth();
       this.renderer.render(this.viewmodel.scene, this.viewmodel.camera);
     }

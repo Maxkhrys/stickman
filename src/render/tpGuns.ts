@@ -73,5 +73,7 @@ export function buildTpGuns(): Record<WeaponId, THREE.BufferGeometry> {
     { geo: cylZ(0.017, 0.04, 8), color: PAL.pink, pos: [0, 0.0, 0.08] },
     { geo: coneZ(0.016, 0.06, 6), color: PAL.wood, pos: [0, 0.0, -0.21] },
   ]);
-  return { ar, sniper, pistol, melee };
+  const smg = ar.clone().scale(1.18, 1, 0.7);
+  const carbine = ar.clone().scale(1, 1, 1.18);
+  return { ar, sniper, pistol, melee, smg, carbine };
 }

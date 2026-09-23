@@ -38,3 +38,17 @@ crosshair colour, keybinds) are saved to localStorage.
 
 Weapon tuning lives in `src/config/weapons.ts`; movement in `src/config/movement.ts`.
 Architecture and the multiplayer plan: [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Armory update
+
+`V` switches first/third person; `Q` swaps shoulders. Settings also expose camera choice and both keybinds. Scoped sniper aiming uses first person. Third-person reticle shows the actual fighter shot path; red means the barrel is blocked by cover.
+
+Choose Crossfire or Bookyard. **Hold the Sketch** awards one point each second you occupy the marked zone alone. Contested zones stop scoring. Zone moves every 40 seconds; first to 60 wins.
+
+Open **Armory & contracts** to spend earned Ink on Scribbler SMG, Finepoint carbine and character colors. Everyone starts with 600 Ink plus the original rifle/sniper. Finish matches for rewards; quitting and practice give none. Daily contracts refresh at midnight UTC. XP and weapon mastery track completed matches. Progress saves in this browser only.
+
+Practice range has six weapons; use the wheel to reach SMG and carbine (slots 5/6).
+
+Validation: `npm test && npm run test:upgrade && npm run build`. For browser checks start Vite on `127.0.0.1:5178`, run `npx playwright install chromium`, then `node tests/browser.mjs`.
+
+Claude integration instructions: [CLAUDE_HANDOFF.md](CLAUDE_HANDOFF.md).

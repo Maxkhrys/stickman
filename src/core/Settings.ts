@@ -1,13 +1,14 @@
+import type { PrimaryId } from '../config/weapons';
 import type { Difficulty, GameMode } from '../sim/types';
 
 export type Action =
   | 'forward' | 'back' | 'left' | 'right' | 'jump' | 'crouch'
-  | 'fire' | 'ads' | 'reload' | 'weapon1' | 'weapon2' | 'weapon3' | 'weapon4' | 'scoreboard' | 'hitboxes';
+  | 'fire' | 'ads' | 'reload' | 'weapon1' | 'weapon2' | 'weapon3' | 'weapon4' | 'scoreboard' | 'hitboxes' | 'camera' | 'shoulder';
 
 export const ACTION_LABELS: Record<Action, string> = {
   forward: 'Forward', back: 'Back', left: 'Left', right: 'Right', jump: 'Jump', crouch: 'Crouch / Slide',
   fire: 'Fire', ads: 'Aim (ADS) / Heavy', reload: 'Reload', weapon1: 'Slot 1', weapon2: 'Slot 2', weapon3: 'Slot 3', weapon4: 'Slot 4',
-  scoreboard: 'Scoreboard', hitboxes: 'Hit regions (range)',
+  scoreboard: 'Scoreboard', hitboxes: 'Hit regions (range)', camera: 'First / third person', shoulder: 'Swap shoulder',
 };
 
 export interface Settings {
@@ -31,7 +32,10 @@ export interface Settings {
   playerName: string;
   difficulty: Difficulty;
   botCount: number;
-  primary: 'ar' | 'sniper';
+  primary: PrimaryId;
+  cameraMode: 'first' | 'third';
+  shoulder: -1 | 1;
+  mapId: 'arena' | 'bookyard';
   mode: GameMode;
   crosshairColor: string;
   keys: Record<Action, string>;
@@ -55,12 +59,15 @@ export const DEFAULT_SETTINGS: Settings = {
   difficulty: 'easy',
   botCount: 6,
   primary: 'ar',
+  cameraMode: 'first',
+  shoulder: 1,
+  mapId: 'arena',
   mode: 'range',
   crosshairColor: '#1b1b24',
   keys: {
     forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', crouch: 'ShiftLeft',
     fire: 'Mouse0', ads: 'Mouse2', reload: 'KeyR', weapon1: 'Digit1', weapon2: 'Digit2', weapon3: 'Digit3', weapon4: 'Digit4',
-    scoreboard: 'Tab', hitboxes: 'KeyH',
+    scoreboard: 'Tab', hitboxes: 'KeyH', camera: 'KeyV', shoulder: 'KeyQ',
   },
 };
 
@@ -72,7 +79,11 @@ function sanitize(p: Partial<Settings> & { volume?: number; cameraBob?: number }
   if (!['easy', 'normal', 'hard'].includes(s.difficulty)) s.difficulty = 'hard';
   if (p.volume !== undefined && p.masterVolume === undefined) s.masterVolume = p.volume;
   if (p.cameraBob !== undefined && p.cameraShake === undefined) s.cameraShake = p.cameraBob;
-  if (s.primary !== 'ar' && s.primary !== 'sniper') s.primary = 'ar';
+  if (!['ar', 'sniper', 'smg', 'carbine'].includes(s.primary)) s.primary = 'ar';
+  if (!['ffa', 'range', 'sketch'].includes(s.mode)) s.mode = 'range';
+  if (s.cameraMode !== 'third') s.cameraMode = 'first';
+  if (s.mapId !== 'bookyard') s.mapId = 'arena';
+  s.shoulder = s.shoulder === -1 ? -1 : 1;
   s.botCount = Math.max(1, Math.min(8, Math.round(s.botCount || 6)));
   s.fov = Math.max(70, Math.min(120, s.fov));
   delete (s as unknown as Record<string, unknown>).volume;

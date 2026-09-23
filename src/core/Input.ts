@@ -19,6 +19,8 @@ export class Input {
   /** timestamp of the last fire-button press (for latency measurement) */
   lastFirePress = 0;
   onToggleHitboxes: (() => void) | null = null;
+  onToggleCamera: (() => void) | null = null;
+  onSwapShoulder: (() => void) | null = null;
   private held = new Set<string>();
   private latched = new Set<string>();
   private scrollAcc = 0;
@@ -33,7 +35,7 @@ export class Input {
       const was = this.locked;
       this.locked = document.pointerLockElement === this.canvas;
       if (was && !this.locked) {
-        this.held.clear();
+        this.clear();
         this.onPauseRequest?.();
       }
     });
@@ -54,7 +56,7 @@ export class Input {
         this.rebindCallback(e.code);
         return;
       }
-      if (e.code === 'Tab') e.preventDefault();
+      if (this.locked && e.code === 'Tab') e.preventDefault();
       if (!this.locked) return;
       if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
       this.press(e.code);
@@ -78,11 +80,12 @@ export class Input {
       },
       { passive: true },
     );
-    window.addEventListener('blur', () => this.held.clear());
+    window.addEventListener('blur', () => this.clear());
   }
 
   private press(code: string) {
-    if (!this.held.has(code)) this.latched.add(code);
+    const fresh = !this.held.has(code);
+    if (fresh) this.latched.add(code);
     this.held.add(code);
     const k = this.settings.keys;
     if (code === k.weapon1) this.slotReq = 0;
@@ -90,13 +93,23 @@ export class Input {
     if (code === k.weapon3) this.slotReq = 2;
     if (code === k.weapon4) this.slotReq = 3;
     if (code === k.fire) this.lastFirePress = performance.now();
-    if (code === k.hitboxes) this.onToggleHitboxes?.();
+    if (fresh && code === k.hitboxes) this.onToggleHitboxes?.();
+    if (fresh && code === k.camera) this.onToggleCamera?.();
+    if (fresh && code === k.shoulder) this.onSwapShoulder?.();
     if (code === k.scoreboard) this.onScoreboard?.(true);
   }
 
   private release(code: string) {
     this.held.delete(code);
     if (code === this.settings.keys.scoreboard) this.onScoreboard?.(false);
+  }
+
+  private clear() {
+    this.held.clear();
+    this.latched.clear();
+    this.slotReq = -1;
+    this.scrollAcc = 0;
+    this.onScoreboard?.(false);
   }
 
   async lock() {

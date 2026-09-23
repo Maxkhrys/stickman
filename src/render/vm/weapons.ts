@@ -329,5 +329,17 @@ function buildPencil(): WeaponRig {
 }
 
 export function buildWeaponRigs(): Record<WeaponId, WeaponRig> {
-  return { ar: buildInkblaster(), sniper: buildGraphite(), pistol: buildHighlighter(), melee: buildPencil() };
+  const smg = buildInkblaster();
+  smg.id = 'smg';
+  smg.root.scale.set(1.15, 1, 0.72);
+  smg.root.add(part(rbox(0.085, 0.08, 0.18, 0.012), PAL.hiYellow, { pos: [0, -0.045, -0.17], outline: O }));
+  smg.root.add(part(tubeZ(0.033, 0.11, 10), PAL.navy, { pos: [0, 0.002, -0.47], outline: THIN }));
+  smg.eyeRelief = 0.18;
+  const carbine = buildInkblaster();
+  carbine.id = 'carbine';
+  carbine.root.add(part(tubeZ(0.013, 0.19, 10), PAL.graphite, { pos: [0, 0.002, -0.5], outline: THIN }));
+  carbine.root.add(part(rbox(0.06, 0.035, 0.18, 0.005), PAL.gold, { pos: [0, 0.035, -0.17], outline: THIN }));
+  carbine.root.add(part(rbox(0.046, 0.095, 0.11, 0.008), PAL.graphite, { pos: [0, -0.015, 0.24], outline: O }));
+  carbine.sockets.muzzle.position.z = -0.61;
+  return { ar: buildInkblaster(), sniper: buildGraphite(), pistol: buildHighlighter(), melee: buildPencil(), smg, carbine };
 }

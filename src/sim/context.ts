@@ -5,6 +5,7 @@ import type { World } from './world';
 /** What sim subsystems (combat, weapons, bots) need from the match. Keeps modules decoupled. */
 export interface SimContext {
   time: number;
+  objectiveTarget?(): { x: number; y: number; z: number } | null;
   rng: () => number;
   world: World;
   fighters: Fighter[];

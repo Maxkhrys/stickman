@@ -108,7 +108,8 @@ const NO_RECOIL = {
   adsRecoilMult: 1,
 };
 
-export const WEAPONS: Record<WeaponId, WeaponDef> = {
+export type PrimaryId = 'ar' | 'sniper' | 'smg' | 'carbine';
+const BASE_WEAPONS: Record<Exclude<WeaponId, 'smg' | 'carbine'>, WeaponDef> = {
   // "Inkblaster" - fountain-pen assault rifle. Sharp impulse, short recovery, gentle learnable climb.
   ar: {
     id: 'ar',
@@ -120,7 +121,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     auto: true,
     reloadTime: 1.9,
     reloadInsertAt: 0.62,
-    drawTime: 0.34,
+    drawTime: 0.24,
     range: 200,
     falloffStart: 30,
     falloffEnd: 70,
@@ -302,9 +303,33 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
   },
 };
 
+export const WEAPONS: Record<WeaponId, WeaponDef> = {
+  ...BASE_WEAPONS,
+  smg: {
+    ...BASE_WEAPONS.ar, id: 'smg', name: 'Scribbler',
+    damage: { head: 38, chest: 18, stomach: 18, limb: 15 }, magSize: 36,
+    fireInterval: 60 / 900, reloadTime: 1.55, drawTime: 0.2, adsTime: 0.12,
+    falloffStart: 14, falloffEnd: 42, falloffMin: 0.48,
+    spreadHip: 0.009, spreadMove: 0.018, spreadAir: 0.035, spreadPerShot: 0.003,
+    adsSpreadMult: 0.2, adsMoveSpreadMult: 0.45, moveSpeedMult: 1.07,
+    kickPitch: 0.006, kickYaw: 0.0014, recoilMaxPitch: 0.065,
+    recoilPattern: [[0.003, 0], [0.003, 0.0005], [0.003, 0.001], [0.0025, -0.001]], recoilLoopFrom: 0,
+  },
+  carbine: {
+    ...BASE_WEAPONS.ar, id: 'carbine', name: 'Finepoint', auto: false,
+    damage: { head: 95, chest: 43, stomach: 38, limb: 30 }, magSize: 16,
+    fireInterval: 0.23, reloadTime: 1.8, drawTime: 0.28, adsTime: 0.19,
+    falloffStart: 45, falloffEnd: 100, falloffMin: 0.75,
+    spreadHip: 0.007, spreadMove: 0.025, spreadPerShot: 0.006, spreadRecover: 0.16,
+    adsSpreadMult: 0.06, adsMoveSpreadMult: 0.18, adsZoom: 0.7,
+    kickPitch: 0.023, kickYaw: 0.0008, kickTau: 0.06,
+    recoilPattern: [[0.008, 0], [0.007, 0.0008], [0.006, -0.0008]], recoilLoopFrom: 0,
+  },
+};
+
 /** Practice range carries everything. */
-export const RANGE_LOADOUT: WeaponId[] = ['ar', 'sniper', 'pistol', 'melee'];
+export const RANGE_LOADOUT: WeaponId[] = ['ar', 'sniper', 'pistol', 'melee', 'smg', 'carbine'];
 /** Match loadout: chosen primary + sidearm + melee. */
-export function matchLoadout(primary: 'ar' | 'sniper'): WeaponId[] {
+export function matchLoadout(primary: PrimaryId): WeaponId[] {
   return [primary, 'pistol', 'melee'];
 }

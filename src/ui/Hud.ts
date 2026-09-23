@@ -11,7 +11,7 @@ const el = (tag: string, cls = '', html = '') => {
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 const hex = (c: number) => '#' + c.toString(16).padStart(6, '0');
-export const WNAME: Record<string, string> = { ar: 'Inkblaster', sniper: 'Graphite', pistol: 'Highlighter', melee: 'Pencil' };
+export const WNAME: Record<string, string> = { ar: 'Inkblaster', sniper: 'Graphite', pistol: 'Highlighter', melee: 'Pencil', smg: 'Scribbler', carbine: 'Finepoint' };
 
 export type HitKind = 'body' | 'head' | 'kill' | 'blocked';
 
@@ -29,6 +29,8 @@ export class Hud {
   private vignette = el('div', 'vignette');
   private hpPanel = el('div', 'panel hp', '<span class="lbl">INK</span><span class="num">100</span><div class="bar"><div></div></div><div class="protect hidden">protected<div class="pbar"><div></div></div></div>');
   private ammoPanel = el('div', 'panel ammo');
+  private objectiveKey = '';
+  private objectivePanel = el('div', 'objective-panel hidden');
   private top = el('div', 'panel top', '<div class="timer"></div><div class="score"></div>');
   private fpsEl = el('div', 'panel fps');
   private feed = el('div', 'panel feed');
@@ -53,7 +55,7 @@ export class Hud {
 
   constructor(parent: HTMLElement) {
     this.root.id = 'hud';
-    for (const e of [this.dmgLayer, this.tagLayer, this.indLayer, this.vignette, this.xh, this.hm, this.hpPanel, this.ammoPanel, this.top, this.fpsEl, this.feed, this.notice, this.note, this.stats, this.death, this.board])
+    for (const e of [this.dmgLayer, this.tagLayer, this.indLayer, this.vignette, this.xh, this.hm, this.hpPanel, this.ammoPanel, this.objectivePanel, this.top, this.fpsEl, this.feed, this.notice, this.note, this.stats, this.death, this.board])
       this.root.appendChild(e);
     parent.appendChild(this.root);
   }
@@ -88,6 +90,27 @@ export class Hud {
     r.style.left = `${gap}px`;
     this.xh.classList.toggle('melee', weapon === 'melee');
     this.xh.style.opacity = visible ? String(Math.max(0, 1 - adsE * 1.6)) : '0';
+  }
+
+  objective(info: MatchInfo, me: Fighter) {
+    const o = info.objective;
+    this.objectivePanel.classList.toggle('hidden', !o);
+    if (!o) return;
+    const distance = Math.round(Math.hypot(me.pos.x - o.x, me.pos.z - o.z));
+    const state = o.contested ? 'CONTESTED' : o.owner === me.id ? 'SCORING +1 / SEC' : o.owner >= 0 ? 'RIVAL SCORING' : 'CAPTURE THE SKETCH';
+    const angle = Math.atan2(o.x - me.pos.x, -(o.z - me.pos.z)) + me.yaw;
+    const key = `${state}|${distance}|${Math.ceil(o.rotatesIn)}|${me.stats.objective}|${Math.round(angle * 20)}`;
+    if (key === this.objectiveKey) return;
+    this.objectiveKey = key;
+    this.objectivePanel.innerHTML = `<b>${state}</b><span><i style="transform:rotate(${angle}rad)">↑</i> ${distance}m · moves in ${Math.ceil(o.rotatesIn)}s · you ${me.stats.objective}/${info.scoreLimit}</span>`;
+  }
+
+  aimPoint(point: { x: number; y: number } | null, blocked = false) {
+    for (const el of [this.xh, this.hm]) {
+      el.style.left = point ? `${point.x}px` : '50%';
+      el.style.top = point ? `${point.y}px` : '50%';
+    }
+    this.xh.classList.toggle('obstructed', blocked);
   }
 
   hitmarker(kind: HitKind) {
@@ -217,13 +240,13 @@ export class Hud {
     const rows = fighters
       .filter((f) => f.kind !== 'dummy')
       .slice()
-      .sort((a, b) => b.stats.kills - a.stats.kills || a.stats.deaths - b.stats.deaths)
+      .sort((a, b) => (info.mode === 'sketch' ? b.stats.objective - a.stats.objective : b.stats.kills - a.stats.kills) || a.stats.deaths - b.stats.deaths)
       .map((f) => {
         const acc = f.stats.shots ? Math.round((f.stats.hits / f.stats.shots) * 100) : 0;
-        return `<tr class="${f.id === localId ? 'me' : ''}"><td><span class="chip" style="background:${hex(f.color)}"></span>${esc(f.name)}</td><td>${f.stats.kills}</td><td>${f.stats.deaths}</td><td>${(f.stats.kills / Math.max(1, f.stats.deaths)).toFixed(2)}</td><td>${acc}%</td><td>${WNAME[f.weapons[0].id]}</td><td>${f.alive ? '' : '✖'}</td></tr>`;
+        return `<tr class="${f.id === localId ? 'me' : ''}"><td><span class="chip" style="background:${hex(f.color)}"></span>${esc(f.name)}</td><td>${f.stats.objective}</td><td>${f.stats.kills}</td><td>${f.stats.deaths}</td><td>${(f.stats.kills / Math.max(1, f.stats.deaths)).toFixed(2)}</td><td>${acc}%</td><td>${WNAME[f.weapons[0].id]}</td><td>${f.alive ? '' : '✖'}</td></tr>`;
       })
       .join('');
-    this.board.innerHTML = `<h2>${esc(info.mapName)} — first to ${info.scoreLimit}</h2><table><tr><th>Name</th><th>K</th><th>D</th><th>K/D</th><th>Acc</th><th>Primary</th><th></th></tr>${rows}</table>`;
+    this.board.innerHTML = `<h2>${esc(info.mapName)} — first to ${info.scoreLimit}</h2><table><tr><th>Name</th><th>Zone</th><th>K</th><th>D</th><th>K/D</th><th>Acc</th><th>Primary</th><th></th></tr>${rows}</table>`;
   }
 
   /** advance frame-clock HUD animations */
@@ -255,12 +278,13 @@ export class Hud {
       if (this.noteTimer <= 0) this.note.style.opacity = '0';
     }
     if (this.noticeTimer > 0) this.noticeTimer -= dt;
-    if (info.mode === 'ffa') {
+    if (info.mode !== 'range') {
       const t = Math.max(0, Math.ceil(info.timeLeft));
       this.top.querySelector('.timer')!.textContent = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
       const others = fighters.filter((f) => f !== me);
-      const leader = others.reduce((a, b) => (b.stats.kills > a.stats.kills ? b : a), others[0] ?? fighters[0]);
-      this.top.querySelector('.score')!.textContent = me ? `you ${me.stats.kills} · best ${leader.name} ${leader.stats.kills} · to ${info.scoreLimit}` : '';
+      const field = info.mode === 'sketch' ? 'objective' : 'kills';
+      const leader = others.reduce((a, b) => (b.stats[field] > a.stats[field] ? b : a), others[0] ?? fighters[0]);
+      this.top.querySelector('.score')!.textContent = me ? `you ${me.stats[field]} · best ${leader.name} ${leader.stats[field]} · to ${info.scoreLimit}` : '';
     } else {
       this.top.querySelector('.timer')!.textContent = 'PRACTICE';
       this.top.querySelector('.score')!.textContent = '';
@@ -284,7 +308,7 @@ export class Hud {
     const key = `${slot.id}|${slot.mag}|${me.cur}|${Math.round(reloadP * 20)}|${me.weapons.length}`;
     if (key !== this.lastAmmoKey) {
       this.lastAmmoKey = key;
-      const slots = me.weapons.map((w, i) => `<span class="${i === me.cur ? 'on' : ''}"><b>${i + 1}</b> ${WNAME[w.id]}</span>`).join('');
+      const slots = me.weapons.map((w, i) => `<span class="${i === me.cur ? 'on' : ''}"><b>${i < 4 ? i + 1 : '↕'}</b> ${WNAME[w.id]}</span>`).join('');
       const mag = def.kind === 'melee' ? '✎' : String(slot.mag);
       this.ammoPanel.innerHTML =
         `<div class="wname">${WNAME[slot.id]}</div>` +

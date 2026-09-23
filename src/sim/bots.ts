@@ -382,6 +382,15 @@ export class BotBrain {
       }
     }
 
+    const objective = ctx.objectiveTarget?.();
+    if (objective && this.state !== 'retreat' && this.state !== 'cover') {
+      const distance = vdistH(f.pos, objective);
+      if (distance > 2.4 || Math.abs(f.pos.y - objective.y) > 1.5) {
+        if (!this.goal || vdistH(this.goal, objective) > 2 || this.arrived()) this.goTo(objective);
+        follow();
+      } else if (!this.visible) { wishX = 0; wishZ = 0; }
+    }
+
     this.repathTimer -= dt;
     if (this.repathTimer <= 0 && this.goal) {
       if ((this.state === 'engage' || this.state === 'investigate') && this.lastSeen && !this.visible) this.goTo(this.lastSeen);

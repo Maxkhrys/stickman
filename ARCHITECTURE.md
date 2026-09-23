@@ -63,3 +63,11 @@ bounds speeds), and never trust client hit claims.
 | `src/audio/` | procedural WebAudio SFX |
 | `src/ui/` | HUD + menus (DOM) |
 | `src/game/App.ts` | wires everything together, maps events to feedback |
+
+## Third person, progression and objectives
+
+Third person changes presentation only. `clipCamera` sweeps a small camera volume against the collision world. The HUD projects `traceFireLine`, shared with combat, to show the real eye/muzzle shot path. No camera origin is accepted as shooting authority. Scoped sniper aiming returns to first person. Online competitive queues should enforce one perspective per lobby to avoid mixed-perspective visibility advantages.
+
+`Profile` owns local earned currency, unlocks, cosmetic character inks, UTC daily contracts and mastery. Purchases occur before matches and produce the next match's primary/color options. Completion events settle rewards once per match ID. This is an offline progression store, not an anti-cheat boundary. An authoritative multiplayer service must own purchases, validate equipped inventory and sign/commit match rewards in its database.
+
+Hold the Sketch is authoritative Match state, driven by fixed ticks. Occupancy, score, rotation and winner are exposed through MatchInfo; the renderer only visualizes them. Bots reach zones through their existing waypoint and command layers. Future snapshots need objective fields plus objective stats; they require no client authority over scoring.

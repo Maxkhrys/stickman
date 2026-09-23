@@ -144,6 +144,15 @@ export class Sfx {
       this.tone(o, t, 0.06, 'square', 700, 160, 0.14);
       this.noiseBurst(o, t + 0.05, 0.9, 'bandpass', 700, 160, 0.5, 0.2, 0.05); // long tail
       if (local) this.tone(o, t + 0.02, 0.5, 'sine', 55, 40, 0.5);
+    } else if (weapon === 'smg') {
+      this.noiseBurst(o, t, 0.055, 'highpass', 4600, 2200, 0.9, 0.55);
+      this.tone(o, t, 0.065, 'triangle', 240, 70, 0.6);
+      this.click(o, t + 0.025, 3400, 0.13);
+    } else if (weapon === 'carbine') {
+      this.noiseBurst(o, t, 0.015, 'highpass', 5500, 3000, 0.8, 0.9);
+      this.noiseBurst(o, t, 0.19, 'lowpass', 4200, 280, 1, 0.8);
+      this.tone(o, t, 0.18, 'sine', 140, 38, 1.0);
+      this.click(o, t + 0.04, 2100, 0.2);
     } else if (weapon === 'pistol') {
       this.noiseBurst(o, t, 0.012, 'highpass', 4500, 3000, 0.7, 0.9);
       this.noiseBurst(o, t, 0.2, 'lowpass', 5200, 320, 0.9, 0.9, 0.002);

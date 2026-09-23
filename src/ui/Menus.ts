@@ -1,3 +1,7 @@
+import { ARMORY, CONTRACTS, INKS, type Profile, type RewardReceipt } from '../core/Profile';
+import { WEAPONS, type PrimaryId } from '../config/weapons';
+import { weaponPortraits } from '../render/weaponPortraits';
+import type { MatchInfo } from '../sim/match';
 import type { Fighter } from '../sim/fighter';
 import type { Difficulty, GameMode } from '../sim/types';
 import { ACTION_LABELS, DEFAULT_SETTINGS, keyName, saveSettings, type Action, type Settings } from '../core/Settings';
@@ -20,9 +24,10 @@ export class Menus {
   private pause = document.createElement('div');
   private end = document.createElement('div');
   private settingsBack: 'main' | 'pause' = 'main';
+  private armory = document.createElement('div');
 
-  constructor(parent: HTMLElement, private s: Settings, private input: Input, private cb: MenuCallbacks) {
-    for (const e of [this.main, this.settingsEl, this.pause, this.end]) {
+  constructor(parent: HTMLElement, private s: Settings, private input: Input, private cb: MenuCallbacks, private profile: Profile) {
+    for (const e of [this.main, this.settingsEl, this.pause, this.end, this.armory]) {
       e.className = 'screen hidden';
       parent.appendChild(e);
     }
@@ -31,11 +36,11 @@ export class Menus {
   }
 
   hideAll() {
-    for (const e of [this.main, this.settingsEl, this.pause, this.end]) e.classList.add('hidden');
+    for (const e of [this.main, this.settingsEl, this.pause, this.end, this.armory]) e.classList.add('hidden');
   }
 
   get anyOpen() {
-    return [this.main, this.settingsEl, this.pause, this.end].some((e) => !e.classList.contains('hidden'));
+    return [this.main, this.settingsEl, this.pause, this.end, this.armory].some((e) => !e.classList.contains('hidden'));
   }
 
   showMain() {
@@ -56,10 +61,12 @@ export class Menus {
       const b = document.createElement('button');
       b.textContent = label;
       b.className = v === cur ? 'on' : '';
+      b.setAttribute('aria-pressed', String(v === cur));
       b.onclick = () => {
         this.cb.click();
         on(v);
-        d.querySelectorAll('button').forEach((x) => x.classList.remove('on'));
+        d.querySelectorAll('button').forEach((x) => { x.classList.remove('on'); x.setAttribute('aria-pressed', 'false'); });
+        b.setAttribute('aria-pressed', 'true');
         b.classList.add('on');
       };
       d.appendChild(b);
@@ -72,6 +79,9 @@ export class Menus {
     r.className = 'row';
     const l = document.createElement('label');
     l.textContent = label;
+    content.setAttribute('aria-label', label);
+    if (content instanceof HTMLInputElement) { content.id = `setting-${label.replace(/\W/g, '')}`; l.htmlFor = content.id; }
+    else content.querySelectorAll('input').forEach(i => i.setAttribute('aria-label', label));
     r.append(l, content);
     return r;
   }
@@ -91,7 +101,7 @@ export class Menus {
     const s = this.s;
     this.main.innerHTML = '';
     const card = document.createElement('div');
-    card.className = 'card';
+    card.className = 'card main-card';
     card.innerHTML = `<div class="title">STICK<br>FIGHT</div><div class="tag">a notebook-doodle arena shooter</div>`;
     const name = document.createElement('input');
     name.type = 'text';
@@ -103,9 +113,9 @@ export class Menus {
     };
     card.appendChild(this.row('Name', name));
     const matchRows: HTMLElement[] = [];
-    const syncMode = () => matchRows.forEach((r) => (r.style.opacity = s.mode === 'ffa' ? '1' : '0.45'));
+    const syncMode = () => matchRows.forEach((r) => (r.style.opacity = s.mode !== 'range' ? '1' : '0.45'));
     card.appendChild(
-      this.row('Mode', this.seg<GameMode>([['range', 'Practice Range'], ['ffa', 'Free-for-all']], s.mode, (v) => {
+      this.row('Mode', this.seg<GameMode>([['range', 'Practice Range'], ['ffa', 'Free-for-all'], ['sketch', 'Hold the Sketch']], s.mode, (v) => {
         s.mode = v;
         saveSettings(s);
         syncMode();
@@ -135,20 +145,84 @@ export class Menus {
     };
     countWrap.append(count, countVal);
     const countRow = this.row('Bots', countWrap);
-    const primRow = this.row('Primary', this.seg<'ar' | 'sniper'>([['ar', 'Inkblaster rifle'], ['sniper', 'Graphite sniper']], s.primary, (v) => {
+    const primRow = this.row('Primary', this.seg<PrimaryId>(ARMORY.filter(a => this.profile.owns(a.id)).map(a => [a.id, WEAPONS[a.id].name]), s.primary, (v) => {
       s.primary = v;
       saveSettings(s);
     }));
     matchRows.push(diffRow, countRow, primRow);
     card.append(diffRow, countRow, primRow);
+    card.appendChild(this.row('Arena', this.seg<'arena' | 'bookyard'>([['arena', 'Crossfire'], ['bookyard', 'Bookyard']], s.mapId, v => { s.mapId = v; saveSettings(s); })));
+    card.appendChild(this.row('Camera', this.seg<'first' | 'third'>([['first', 'First person'], ['third', 'Third person']], s.cameraMode, v => { s.cameraMode = v; saveSettings(s); })));
+    const wallet = document.createElement('div');
+    wallet.className = 'wallet';
+    wallet.textContent = `${this.profile.data.ink} INK  /  LEVEL ${this.profile.level}`;
+    card.appendChild(wallet);
     syncMode();
     card.appendChild(this.btn('PLAY', () => this.cb.play(), true));
+    card.appendChild(this.btn('Armory & contracts', () => this.showArmory()));
     card.appendChild(this.btn('Settings', () => this.showSettings('main')));
     const help = document.createElement('div');
     help.className = 'help small';
-    help.innerHTML = `<kbd>WASD</kbd> move · <kbd>Space</kbd> jump (hold to bhop) · <kbd>Shift</kbd> crouch / slide · <kbd>LMB</kbd> fire · <kbd>RMB</kbd> aim / scope / heavy · <kbd>R</kbd> reload · <kbd>1-4</kbd>/wheel swap · <kbd>H</kbd> hit regions (range) · <kbd>Tab</kbd> scores · <kbd>Esc</kbd> pause`;
+    help.innerHTML = `<kbd>WASD</kbd> move · <kbd>Space</kbd> jump (hold to bhop) · <kbd>Shift</kbd> crouch / slide · <kbd>LMB</kbd> fire · <kbd>RMB</kbd> aim / scope / heavy · <kbd>R</kbd> reload · <kbd>1-4</kbd>/wheel swap · <kbd>V</kbd> camera · <kbd>Q</kbd> shoulder · <kbd>H</kbd> hit regions (range) · <kbd>Tab</kbd> scores · <kbd>Esc</kbd> pause`;
     card.appendChild(help);
     this.main.appendChild(card);
+  }
+
+  showArmory(message = '') {
+    this.hideAll();
+    this.profile.refreshDay();
+    const p = this.profile;
+    this.armory.innerHTML = '';
+    this.armory.classList.remove('hidden');
+    const sheet = document.createElement('div');
+    sheet.className = 'card armory-sheet';
+    sheet.innerHTML = `<header class="armory-header"><div><span>STICKFIGHT / FIELD KIT</span><h2>THE ARMORY</h2></div><div class="ink-balance"><b>${p.data.ink}</b> Ink<br><small>Level ${p.level} · ${p.data.xp % 500}/500 XP</small></div></header>`;
+    const intro = document.createElement('p');
+    intro.textContent = '600 Ink to start. Earn more by finishing matches and contracts. Every weapon is free to try in the range.';
+    sheet.appendChild(intro);
+    const status = document.createElement('p');
+    status.className = 'armory-status'; status.setAttribute('role', 'status');
+    status.textContent = message || (p.storageAvailable ? 'Gear saves in this browser. Match rewards arrive at the results screen.' : 'Browser storage unavailable. Progress lasts for this session only.');
+    sheet.appendChild(status);
+    const layout = document.createElement('div'); layout.className = 'armory-layout';
+    const catalog = document.createElement('div'); catalog.className = 'weapon-catalog';
+    const portraits = weaponPortraits();
+    for (const item of ARMORY) {
+      const def = WEAPONS[item.id], owned = p.owns(item.id), equipped = this.s.primary === item.id;
+      const row = document.createElement('article'); row.className = 'weapon-entry';
+      const photo = document.createElement('img'); photo.src = portraits[item.id] ?? ''; photo.alt = `${def.name} weapon model`; photo.width = 270; photo.height = 120;
+      const content = document.createElement('div');
+      const kills = p.data.mastery[item.id] ?? 0;
+      content.innerHTML = `<span class="weapon-role">${item.role}</span><h3>${def.name}</h3><p>${item.description}</p><div class="weapon-stats">${def.damage.chest} DMG · ${def.magSize} ROUNDS · ${Math.round(60 / (def.bolt ? def.bolt.delay + def.bolt.time : def.fireInterval))} RPM</div><small>Mastery ${Math.floor(kills / 25)} · ${kills} eliminations · next badge in ${25 - kills % 25}</small>`;
+      const button = this.btn(equipped ? 'Equipped' : owned ? 'Equip' : `Unlock · ${item.price} Ink`, () => {
+        if (!owned && !p.buyWeapon(item.id)) { this.showArmory('Not enough Ink. Finish a match or contract.'); return; }
+        this.s.primary = item.id; saveSettings(this.s);
+        this.showArmory(`${def.name} equipped. Ready for your next match.`);
+      });
+      button.disabled = equipped || (!owned && p.data.ink < item.price);
+      if (!owned && p.data.ink < item.price) button.textContent = `Need ${item.price - p.data.ink} more Ink`;
+      content.appendChild(button); row.append(photo, content); catalog.appendChild(row);
+    }
+    const side = document.createElement('aside'); side.className = 'armory-notes';
+    side.innerHTML = '<h3>Today’s contracts</h3><p>Refresh at midnight UTC. Rewards claimed automatically after matches.</p>';
+    for (const c of CONTRACTS) {
+      const n = Math.min(c.target, p.data.daily[c.field]);
+      const entry = document.createElement('div'); entry.className = 'contract';
+      entry.innerHTML = `<b>${c.label}</b><span>${n}/${c.target} · ${p.data.daily.claimed.includes(c.id) ? 'Claimed' : '+' + c.reward + ' Ink'}</span><progress max="${c.target}" value="${n}" aria-label="${c.label}"></progress>`;
+      side.appendChild(entry);
+    }
+    const title = document.createElement('h3'); title.textContent = 'Your character ink'; side.appendChild(title);
+    for (const ink of INKS) {
+      const owned = p.data.inks.includes(ink.id), selected = p.data.equippedInk === ink.id;
+      const b = this.btn(`${ink.name}${selected ? ' · wearing' : owned ? ' · equip' : ' · ' + ink.price + ' Ink'}`, () => {
+        this.showArmory(p.selectInk(ink.id) ? `${ink.name} selected for next match.` : 'Not enough Ink.');
+      });
+      b.classList.add('ink-option'); b.style.setProperty('--swatch', hex(ink.color));
+      b.disabled = selected || (!owned && p.data.ink < ink.price); side.appendChild(b);
+    }
+    layout.append(catalog, side); sheet.appendChild(layout);
+    sheet.appendChild(this.btn('Back to play', () => this.showMain(), true));
+    this.armory.appendChild(sheet);
   }
 
   private buildPause() {
@@ -216,6 +290,7 @@ export class Menus {
           this.cb.settingsChanged();
         })),
       );
+    card.appendChild(this.row('Camera', this.seg<'first' | 'third'>([['first', 'First person'], ['third', 'Third person']], s.cameraMode, v => { s.cameraMode = v; saveSettings(s); })));
     tog('FOV kick', () => s.fovKick, (v) => (s.fovKick = v));
     tog('Damage numbers', () => s.damageNumbers, (v) => (s.damageNumbers = v));
     tog('Hit regions', () => s.showHitboxes, (v) => (s.showHitboxes = v));
@@ -277,31 +352,39 @@ export class Menus {
     el.classList.remove('hidden');
   }
 
-  showEnd(fighters: readonly Fighter[], localId: number, onAgain: () => void) {
+  showEnd(fighters: readonly Fighter[], localId: number, onAgain: () => void, info: MatchInfo, receipt: RewardReceipt | null) {
     this.hideAll();
     const me = fighters.find((f) => f.id === localId)!;
-    const sorted = fighters.filter((f) => f.kind !== 'dummy').slice().sort((a, b) => b.stats.kills - a.stats.kills || a.stats.deaths - b.stats.deaths);
-    const winner = sorted[0];
+    const sorted = fighters.filter((f) => f.kind !== 'dummy').slice().sort((a, b) => (info.mode === 'sketch' ? b.stats.objective - a.stats.objective : b.stats.kills - a.stats.kills) || a.stats.deaths - b.stats.deaths);
+    const winner = fighters.find(f => f.id === info.winnerId);
+    const win = winner?.id === localId;
     const pct = (a: number, b: number) => (b ? Math.round((a / b) * 100) : 0);
     const card = document.createElement('div');
     card.className = 'card results';
     card.innerHTML =
-      `<div class="title" style="font-size:60px">${winner.id === localId ? 'YOU WIN!' : 'MATCH OVER'}</div>` +
-      `<div class="tag">${winner.id === localId ? 'top of the class ✎' : `${esc(winner.name)} took it with ${winner.stats.kills} kills`}</div>` +
+      `<div class="title" style="font-size:60px">${win ? 'YOU WIN!' : winner ? 'MATCH OVER' : 'DRAW'}</div>` +
+      `<div class="tag">${win ? 'top of the class ✎' : winner ? `${esc(winner.name)} wins ${info.mode === 'sketch' ? 'the sketch' : 'the match'}` : 'Same score. Another round?'}</div>` +
       `<div class="bigstats">` +
       `<div><b>${me.stats.kills}/${me.stats.deaths}</b>K / D (${(me.stats.kills / Math.max(1, me.stats.deaths)).toFixed(2)})</div>` +
       `<div><b>${pct(me.stats.hits, me.stats.shots)}%</b>accuracy</div>` +
       `<div><b>${pct(me.stats.headshots, me.stats.hits)}%</b>headshots</div>` +
       `<div><b>${me.stats.bestStreak}</b>best streak</div>` +
       `</div>` +
-      `<table><tr><th>#</th><th>Name</th><th>K</th><th>D</th><th>Acc</th><th>HS%</th><th>Dmg</th></tr>` +
+      `<table><tr><th>#</th><th>Name</th><th>Zone</th><th>K</th><th>D</th><th>Acc</th><th>HS%</th><th>Dmg</th></tr>` +
       sorted
         .map(
           (f, i) =>
-            `<tr class="${f.id === localId ? 'me' : ''}"><td>${i + 1}</td><td><span class="chip" style="background:${hex(f.color)}"></span>${esc(f.name)}</td><td>${f.stats.kills}</td><td>${f.stats.deaths}</td><td>${pct(f.stats.hits, f.stats.shots)}%</td><td>${pct(f.stats.headshots, f.stats.hits)}%</td><td>${f.stats.damage}</td></tr>`,
+            `<tr class="${f.id === localId ? 'me' : ''}"><td>${i + 1}</td><td><span class="chip" style="background:${hex(f.color)}"></span>${esc(f.name)}</td><td>${f.stats.objective}</td><td>${f.stats.kills}</td><td>${f.stats.deaths}</td><td>${pct(f.stats.hits, f.stats.shots)}%</td><td>${pct(f.stats.headshots, f.stats.hits)}%</td><td>${f.stats.damage}</td></tr>`,
         )
         .join('') +
       `</table>`;
+    if (receipt) {
+      const reward = document.createElement('div');
+      reward.className = 'reward-receipt';
+      reward.innerHTML = `<strong>+${receipt.ink} Ink</strong><span>+${receipt.xp} XP · Level ${this.profile.level}</span>`;
+      for (const label of receipt.contracts) { const p = document.createElement('p'); p.textContent = `Contract complete: ${label}`; reward.appendChild(p); }
+      card.appendChild(reward);
+    }
     card.appendChild(this.btn('Play again', onAgain, true));
     card.appendChild(this.btn('Main menu', () => this.cb.quit()));
     this.end.innerHTML = '';

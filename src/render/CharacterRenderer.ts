@@ -19,7 +19,7 @@ import { toonGradient } from './vm/kit';
 //  reload hand, landing squash) sit on top.
 // ============================================================================
 
-type PrimId = 'sphere' | 'head' | 'cyl' | 'torso' | 'box' | 'dome' | 'torus' | 'gun_ar' | 'gun_sniper' | 'gun_pistol' | 'gun_melee';
+type PrimId = 'sphere' | 'head' | 'cyl' | 'torso' | 'box' | 'dome' | 'torus' | 'gun_ar' | 'gun_sniper' | 'gun_pistol' | 'gun_melee' | 'gun_smg' | 'gun_carbine';
 
 const INK = new THREE.Color(0x14141c);
 const WHITE = new THREE.Color(0xffffff);
@@ -207,6 +207,8 @@ export class CharacterRenderer {
       ['gun_sniper', guns.sniper, gunMat, 1],
       ['gun_pistol', guns.pistol, gunMat, 1],
       ['gun_melee', guns.melee, gunMat, 1],
+      ['gun_smg', guns.smg, gunMat, 1],
+      ['gun_carbine', guns.carbine, gunMat, 1],
     ];
     for (const [id, geo, mat, perChar] of defs) {
       const b = new Batch(geo, mat, perChar * maxChars, lineMat);

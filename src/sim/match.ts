@@ -1,6 +1,6 @@
 import { DIFFICULTY, type DifficultyDef } from '../config/difficulty';
 import { MOVE } from '../config/movement';
-import { RANGE_LOADOUT, WEAPONS, matchLoadout } from '../config/weapons';
+import { RANGE_LOADOUT, WEAPONS, matchLoadout, type PrimaryId } from '../config/weapons';
 import { BotBrain } from './bots';
 import type { SimContext } from './context';
 import { createFighter, eyePos, type Fighter } from './fighter';
@@ -20,13 +20,21 @@ export interface MatchOptions {
   timeLimit: number;
   scoreLimit: number;
   /** player's primary for matches (range always carries everything) */
-  primary?: 'ar' | 'sniper';
+  primary?: PrimaryId;
+  mapId?: 'arena' | 'bookyard';
+  playerColor?: number;
   seed?: number;
 }
 
+export interface ObjectiveInfo {
+  x: number; y: number; z: number; radius: number;
+  owner: number; contested: boolean; rotatesIn: number; index: number;
+}
 export interface MatchInfo {
   mode: GameMode;
   mapName: string;
+  objective: ObjectiveInfo | null;
+  winnerId: number | null;
   timeLeft: number;
   scoreLimit: number;
   ended: boolean;
@@ -57,6 +65,11 @@ export class Match implements SimContext {
   tick = 0;
   timeLeft: number;
   ended = false;
+  private objectiveClock = 0;
+  private objectiveIndex = 0;
+  private owner = -1;
+  private contested = false;
+  private objectiveTick = 0;
   private cmds = new Map<number, InputCommand>();
   private brains = new Map<number, BotBrain>();
   private eventCursor = 0;
@@ -64,7 +77,7 @@ export class Match implements SimContext {
   private attackers = new Map<number, number>();
 
   constructor(readonly opts: MatchOptions) {
-    this.map = opts.mode === 'range' ? MAPS.range : MAPS.arena;
+    this.map = opts.mode === 'range' ? MAPS.range : MAPS[opts.mapId ?? 'arena'];
     this.world = new World(this.map);
     this.nav = new NavGraph(this.world, 2);
     this.rng = mulberry32(opts.seed ?? (Math.random() * 1e9) | 0);
@@ -72,10 +85,10 @@ export class Match implements SimContext {
     this.diff = DIFFICULTY[opts.difficulty];
 
     const playerLoadout = opts.mode === 'range' ? RANGE_LOADOUT : matchLoadout(opts.primary ?? 'ar');
-    const player = createFighter(0, opts.playerName || 'You', PLAYER_COLOR, 'player', playerLoadout);
+    const player = createFighter(0, opts.playerName || 'You', opts.playerColor ?? PLAYER_COLOR, 'player', playerLoadout);
     this.fighters.push(player);
 
-    if (opts.mode === 'ffa') {
+    if (opts.mode !== 'range') {
       const count = Math.max(1, Math.min(8, Math.round(opts.botCount)));
       for (let i = 0; i < count; i++) {
         const primary = i < this.diff.sniperBots ? 'sniper' : 'ar';
@@ -97,11 +110,53 @@ export class Match implements SimContext {
     return {
       mode: this.opts.mode,
       mapName: this.map.name,
+      objective: this.objectiveInfo(),
+      winnerId: this.ended ? this.winnerId() : null,
       timeLeft: this.timeLeft,
       scoreLimit: this.opts.scoreLimit,
       ended: this.ended,
       time: this.time,
     };
+  }
+
+  private winnerId(): number | null {
+    const field = this.opts.mode === 'sketch' ? 'objective' : 'kills';
+    const sorted = this.fighters.filter(f => f.kind !== 'dummy').slice().sort((a, b) => b.stats[field] - a.stats[field]);
+    return sorted.length && (sorted.length === 1 || sorted[0].stats[field] > sorted[1].stats[field]) ? sorted[0].id : null;
+  }
+
+  objectiveTarget() {
+    return this.opts.mode === 'sketch' ? this.map.capturePoints![this.objectiveIndex] : null;
+  }
+
+  private objectiveInfo(): ObjectiveInfo | null {
+    const p = this.objectiveTarget();
+    return p ? { ...p, radius: 4, owner: this.owner, contested: this.contested, rotatesIn: 40 - this.objectiveClock, index: this.objectiveIndex } : null;
+  }
+
+  private stepObjective(dt: number) {
+    if (this.opts.mode !== 'sketch') return;
+    this.objectiveClock += dt;
+    if (this.objectiveClock >= 40) {
+      this.objectiveClock -= 40;
+      this.objectiveIndex = (this.objectiveIndex + 1) % this.map.capturePoints!.length;
+      this.objectiveTick = 0;
+      this.owner = -1;
+    }
+    const p = this.objectiveTarget()!;
+    const occupants = this.fighters.filter(f => f.alive && f.spawnProtect <= 0 && Math.abs(f.pos.y - p.y) < 1.6 && Math.hypot(f.pos.x - p.x, f.pos.z - p.z) < 4);
+    this.contested = occupants.length > 1;
+    const owner = occupants.length === 1 ? occupants[0].id : -1;
+    if (owner !== this.owner) this.objectiveTick = 0;
+    this.owner = owner;
+    if (owner < 0) { this.objectiveTick = 0; return; }
+    this.objectiveTick += dt;
+    while (this.objectiveTick >= 1 - 1e-8) {
+      this.objectiveTick -= 1;
+      const f = occupants[0];
+      f.stats.objective++;
+      if (f.stats.objective >= this.opts.scoreLimit) { this.endMatch(); break; }
+    }
   }
 
   /** input/command layer entry point */
@@ -279,6 +334,8 @@ export class Match implements SimContext {
       }
       if (f.pos.y < -30) f.pos.y = 5;
     }
+
+    this.stepObjective(dt);
 
     // hearing: bots react to gunfire & footsteps
     for (let i = this.eventCursor; i < this.events.length; i++) {

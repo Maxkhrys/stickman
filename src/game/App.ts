@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Profile } from '../core/Profile';
 import { WEAPONS } from '../config/weapons';
 import { Input } from '../core/Input';
 import { FixedLoop } from '../core/Loop';
@@ -7,11 +8,11 @@ import { Sfx } from '../audio/Sfx';
 import { LocalAdapter } from '../net/LocalAdapter';
 import type { NetworkAdapter } from '../net/NetworkAdapter';
 import { GameRenderer } from '../render/GameRenderer';
-import { computeSpread } from '../sim/combat';
+import { aimAngles, computeSpread, traceFireLine } from '../sim/combat';
 import { eyePos, type Fighter } from '../sim/fighter';
 import { TICK_DT } from '../sim/match';
-import { emptyCommand, type GameEvent, type HitPart } from '../sim/types';
-import { flatRight } from '../sim/vec';
+import { emptyCommand, type GameEvent, type HitPart, type WeaponId } from '../sim/types';
+import { flatRight, forwardFromAngles } from '../sim/vec';
 import { Hud, WNAME } from '../ui/Hud';
 import { Menus } from '../ui/Menus';
 import { ScopeOverlay } from '../ui/ScopeOverlay';
@@ -26,6 +27,10 @@ const PART_LABEL: Record<HitPart, string> = { head: 'head', chest: 'upper chest'
 
 export class App {
   readonly settings: Settings = loadSettings();
+  readonly profile = new Profile();
+  private matchId = '';
+  private weaponKills: Partial<Record<WeaponId, number>> = {};
+  private headshotKills = 0;
   readonly canvas = document.getElementById('game') as HTMLCanvasElement;
   readonly ui = document.getElementById('ui') as HTMLElement;
   readonly input = new Input(this.settings, this.canvas);
@@ -50,6 +55,7 @@ export class App {
   private awaitFrame = 0;
 
   constructor() {
+    if (!this.profile.owns(this.settings.primary)) this.settings.primary = 'ar';
     this.menus = new Menus(this.ui, this.settings, this.input, {
       play: () => void this.startMatch(),
       resume: () => this.resume(),
@@ -59,7 +65,12 @@ export class App {
         this.sfx.unlock();
         this.sfx.ui();
       },
-    });
+    }, this.profile);
+    this.input.onToggleCamera = () => {
+      this.settings.cameraMode = this.settings.cameraMode === 'first' ? 'third' : 'first';
+      saveSettings(this.settings);
+    };
+    this.input.onSwapShoulder = () => { this.settings.shoulder = this.settings.shoulder === 1 ? -1 : 1; saveSettings(this.settings); };
     this.input.onPauseRequest = () => {
       if (this.state === 'playing') this.pause();
     };
@@ -118,10 +129,14 @@ export class App {
       difficulty: s.difficulty,
       playerName: s.playerName,
       botCount: s.botCount,
-      primary: s.primary,
+      primary: this.profile.owns(s.primary) ? s.primary : 'ar',
+      mapId: s.mapId,
+      playerColor: this.profile.color,
       timeLimit: 6 * 60,
-      scoreLimit: 25,
+      scoreLimit: s.mode === 'sketch' ? 60 : 25,
     });
+    this.matchId = crypto.randomUUID();
+    this.weaponKills = {}; this.headshotKills = 0;
     this.renderer.loadMap(this.adapter.map(), this.adapter.world());
     const me = this.me()!;
     this.input.yaw = me.yaw;
@@ -133,7 +148,9 @@ export class App {
     this.rangeDps = [];
     this.applySettings();
     if (s.mode === 'range') {
-      this.hud.setNote('✎ <b>Practice range</b>: <kbd>1-4</kbd> swap instantly · <kbd>H</kbd> show hit regions · <kbd>RMB</kbd> aim / scope. Movement course on the right.', 8);
+      this.hud.setNote('✎ <b>Practice range</b>: <kbd>1-4</kbd> / wheel swap all 6 weapons · <kbd>H</kbd> show hit regions · <kbd>RMB</kbd> aim / scope. Movement course on the right.', 8);
+    } else if (s.mode === 'sketch') {
+      this.hud.setNote('Hold the marked zone alone to score. First to 60. Zone moves every 40 seconds. V camera · Q shoulder.', 8);
     } else {
       this.hud.setNote(`✎ First to 25 erasures. ${s.botCount} bots on <b>${s.difficulty}</b>. <kbd>Tab</kbd> scores.`, 5);
     }
@@ -144,6 +161,7 @@ export class App {
   private pause() {
     if (this.state !== 'playing') return;
     this.state = 'paused';
+    this.input.unlock();
     this.menus.showPause();
   }
 
@@ -206,7 +224,10 @@ export class App {
           this.sfx.shot(e.weapon, 0);
           R.viewmodel.fire(e.weapon, R.zoom.adsE);
           R.punch(e.weapon === 'sniper' ? 0.08 : e.weapon === 'pistol' ? 0.04 : 0.02);
-          R.localMuzzleWorld(tv);
+          if (R.thirdPersonActive) {
+            tv.set(e.from.x, e.from.y, e.from.z);
+            R.effects.worldFlash(tv, e.weapon === 'sniper' ? 0.8 : 0.5);
+          } else R.localMuzzleWorld(tv);
           // latency: first shot after a fresh press (auto-fire continuation isn't a new click)
           const press = this.input.lastFirePress;
           const since = performance.now() - press;
@@ -294,6 +315,10 @@ export class App {
           }
         }
         if (e.killer === local && e.victim !== local) {
+          if (this.adapter.info().mode !== 'range') {
+            this.weaponKills[e.weapon] = (this.weaponKills[e.weapon] ?? 0) + 1;
+            if (e.headshot) this.headshotKills++;
+          }
           this.hud.hitmarker('kill');
           this.sfx.kill(e.headshot);
           R.hitStop(0.06);
@@ -375,7 +400,11 @@ export class App {
         this.sfx.matchEnd();
         this.scope.update(0, null);
         this.hud.scoreboard(false, [], 0, this.adapter.info());
-        this.menus.showEnd(this.adapter.fighters(), local, () => void this.startMatch());
+        {
+          const info = this.adapter.info(), me = this.me()!;
+          const receipt = info.mode !== 'range' ? this.profile.settle({ id: this.matchId, kills: me.stats.kills, headshots: this.headshotKills, objective: me.stats.objective, won: info.winnerId === local, weaponKills: this.weaponKills }) : null;
+          this.menus.showEnd(this.adapter.fighters(), local, () => void this.startMatch(), info, receipt);
+        }
         break;
     }
   }
@@ -416,6 +445,9 @@ export class App {
       frameDt: fdt,
       hfov: this.settings.fov,
       spectateId: this.adapter.localId,
+      thirdPerson: this.settings.cameraMode === 'third',
+      shoulder: this.settings.shoulder,
+      objective: info.objective,
       deathLook: me && !me.alive ? this.fighter(this.lastKillerId)?.pos ?? null : null,
     });
     if (this.awaitFrame > 0) {
@@ -434,7 +466,17 @@ export class App {
     this.scope.update(me.alive ? z.scopeCover : 0, z.eyepiece);
 
     this.hud.update(fdt, me, this.adapter.fighters(), info, this.loop.fps, this.settings.showFps);
-    this.hud.crosshair(computeSpread(me), z.vfov, def.id, Math.max(z.adsE, z.scopeCover), me.alive && z.scopeCover < 0.5);
+    this.hud.crosshair(computeSpread(me), z.vfov, def.id, this.renderer.thirdPersonActive ? 0 : Math.max(z.adsE, z.scopeCover), me.alive && z.scopeCover < 0.5);
+    if (this.renderer.thirdPersonActive) {
+      const aim = aimAngles(me, info.time);
+      // A copy reflects immediate mouse input without mutating authoritative state.
+      const sight = { ...me, yaw: this.input.yaw, pitch: this.input.pitch };
+      const dir = forwardFromAngles(this.input.yaw + aim.yaw - me.yaw, this.input.pitch + aim.pitch - me.pitch);
+      const trace = traceFireLine({ world: this.adapter.world(), fighters: this.adapter.fighters() }, sight, dir);
+      const point = trace.tr.point;
+      this.hud.aimPoint(this.renderer.project(tv.set(point.x, point.y, point.z)), trace.obstructed);
+    } else this.hud.aimPoint(null);
+    this.hud.objective(info, me);
     this.hud.scoreboard(this.showBoard && this.state === 'playing', this.adapter.fighters(), this.adapter.localId, info);
     this.hud.updateTags(performance.now() / 1000, this.adapter.fighters(), (id) => {
       const h = this.renderer.characters.headOf(id);

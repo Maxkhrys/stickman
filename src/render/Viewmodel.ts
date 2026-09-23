@@ -163,8 +163,8 @@ export class Viewmodel {
   /** Decorative kick. Gameplay recoil is separate (it moves the camera/aim in the sim). */
   fire(weapon: WeaponId, adsE: number) {
     const a = 1 - adsE;
-    if (weapon === 'ar') {
-      this.kickZ.v += 0.75;
+    if (weapon === 'ar' || weapon === 'smg' || weapon === 'carbine') {
+      this.kickZ.v += weapon === 'smg' ? 0.45 : weapon === 'carbine' ? 1.1 : 0.75;
       this.kickPitch.v += 1.6 * (0.35 + 0.65 * a);
       this.kickRoll.v += (Math.random() - 0.5) * 0.9 * (0.3 + 0.7 * a);
       this.kickX.v += (Math.random() - 0.5) * 0.08 * a;

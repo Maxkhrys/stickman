@@ -14,6 +14,7 @@ export interface WeaponSlot {
 }
 
 export interface FighterStats {
+  objective: number;
   kills: number;
   deaths: number;
   shots: number;
@@ -171,7 +172,7 @@ export function createFighter(id: number, name: string, color: number, kind: Fig
     ads: 0,
     prevAds: 0,
     prevButtons: 0,
-    stats: { kills: 0, deaths: 0, shots: 0, hits: 0, headshots: 0, damage: 0, streak: 0, bestStreak: 0 },
+    stats: { objective: 0, kills: 0, deaths: 0, shots: 0, hits: 0, headshots: 0, damage: 0, streak: 0, bestStreak: 0 },
     dummyT: 0,
   };
 }

@@ -40,6 +40,7 @@ try {
   check('V returns to first person', await page.evaluate(() => !window.stickfight.renderer.thirdPersonActive));
   // All weapon rigs must render in hip, ADS and reload, including the new unlocks.
   for (const id of ['ar', 'sniper', 'pistol', 'melee', 'smg', 'carbine']) {
+    await page.waitForFunction(() => window.stickfight.adapter.fighters()[0].meleeWindup <= 0);
     await page.evaluate(id => { const a = window.stickfight; const f = a.adapter.fighters()[0]; a.input.slotReq = f.weapons.findIndex(w => w.id === id); }, id);
     await page.waitForFunction(id => { const f = window.stickfight.adapter.fighters()[0]; return f.weapons[f.cur].id === id && f.switchTimer === 0; }, id);
     await page.mouse.down({ button: 'right' });

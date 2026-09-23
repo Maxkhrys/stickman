@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { Profile } from '../core/Profile';
 import { WEAPONS } from '../config/weapons';
-import { SAND, sandTint } from '../render/sand';
+import { SAND, sandTint, setSandQuality, type SandQuality } from '../render/sand';
 import { Input } from '../core/Input';
 import { FixedLoop } from '../core/Loop';
 import { loadSettings, saveSettings, type Settings } from '../core/Settings';
@@ -17,6 +17,7 @@ import { flatRight, forwardFromAngles } from '../sim/vec';
 import { Hud, WNAME } from '../ui/Hud';
 import { Menus } from '../ui/Menus';
 import { ScopeOverlay } from '../ui/ScopeOverlay';
+import { TouchControls } from '../ui/TouchControls';
 
 type AppState = 'menu' | 'playing' | 'paused' | 'ended';
 
@@ -38,6 +39,8 @@ export class App {
   readonly sfx = new Sfx();
   readonly renderer = new GameRenderer(this.canvas);
   readonly hud = new Hud(this.ui);
+  /** on-screen controls on touch devices (null on desktop: nothing changes there) */
+  readonly touch: TouchControls | null = this.input.touchMode ? new TouchControls(this.input, this.settings) : null;
   readonly scope = new ScopeOverlay(this.ui);
   readonly menus: Menus;
   private adapter: NetworkAdapter = new LocalAdapter();
@@ -82,7 +85,17 @@ export class App {
       saveSettings(this.settings);
       this.applySettings();
     };
-    window.addEventListener('resize', () => this.renderer.resize());
+    window.addEventListener('resize', () => {
+      this.renderer.resize();
+      // portrait on a phone: pause behind the rotate prompt instead of playing a crushed view
+      if (this.touch && window.innerHeight > window.innerWidth && this.state === 'playing') this.pause();
+    });
+    if (this.touch) {
+      document.body.classList.add('touch');
+      document.body.insertBefore(this.touch.root, this.ui);
+      this.touch.onPause = () => this.pause();
+      document.addEventListener('visibilitychange', () => { if (document.hidden && this.state === 'playing') this.pause(); });
+    }
     this.canvas.addEventListener('click', () => {
       if (this.state === 'playing' && !this.input.locked) void this.input.lock();
     });
@@ -99,7 +112,11 @@ export class App {
     this.sfx.setLevels(s.masterVolume, s.weaponVolume, s.feedbackVolume);
     this.renderer.motionScale = s.cameraShake;
     this.renderer.fovKickOn = s.fovKick;
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2) * s.renderScale * 0.75);
+    // detail tier: phones default to the light sand path; desktop keeps full detail
+    const q: SandQuality = s.graphics === 'auto' ? (this.input.touchMode ? 'low' : 'high') : s.graphics;
+    setSandQuality(q);
+    const dprCap = q === 'low' ? 1.6 : q === 'medium' ? 1.8 : 2;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, dprCap) * s.renderScale * 0.75);
     this.hud.setCrosshairColor(s.crosshairColor);
     this.renderer.hitboxes.enabled = s.showHitboxes && this.state !== 'menu' && this.adapter.info().mode === 'range';
   }
@@ -148,7 +165,12 @@ export class App {
     this.state = 'playing';
     this.rangeDps = [];
     this.applySettings();
-    if (s.mode === 'range') {
+    if (this.touch) {
+      this.enterFullscreen();
+      this.hud.setNote(s.mode === 'range'
+        ? '✎ <b>Practice range</b>: left thumb moves · drag right side to aim · hold <b>FIRE</b> and drag to aim while shooting · <b>⇄</b> swaps weapons'
+        : s.mode === 'sketch' ? 'Hold the marked zone alone to score. First to 60.' : `✎ First to 25 erasures. ${s.botCount} bots on <b>${s.difficulty}</b>.`, 7);
+    } else if (s.mode === 'range') {
       this.hud.setNote('✎ <b>Practice range</b>: <kbd>1-4</kbd> / wheel swap all 6 weapons · <kbd>H</kbd> show hit regions · <kbd>RMB</kbd> aim / scope. Movement course on the right.', 8);
     } else if (s.mode === 'sketch') {
       this.hud.setNote('Hold the marked zone alone to score. First to 60. Zone moves every 40 seconds. V camera · Q shoulder.', 8);
@@ -157,6 +179,21 @@ export class App {
     }
     void this.input.lock();
     this.starting = false;
+  }
+
+  /** phones: fullscreen + landscape lock where the browser allows it (Android); iOS just plays in-page */
+  private enterFullscreen() {
+    const el = document.documentElement as HTMLElement & { webkitRequestFullscreen?: () => void };
+    try {
+      if (!document.fullscreenElement && el.requestFullscreen) {
+        void el.requestFullscreen({ navigationUI: 'hide' }).then(() => {
+          const o = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> };
+          return o?.lock?.('landscape');
+        }).catch(() => {});
+      }
+    } catch {
+      /* not supported */
+    }
   }
 
   private pause() {
@@ -342,6 +379,7 @@ export class App {
           this.hud.killNotice(victim.name, tag);
         }
         if (e.victim === local) {
+          this.touch?.releaseAll(); // no toggled ADS carried through death
           this.lastKillerName = killer.id === local ? '' : killer.name;
           this.lastKillerId = killer.id;
         }
@@ -474,6 +512,7 @@ export class App {
       if (this.latency.frame.length > 30) this.latency.frame.shift();
       this.awaitFrame = 0;
     }
+    this.touch?.setActive(this.state === 'playing' && !!me);
     if (!me) return;
     const z = this.renderer.zoom;
     const def = WEAPONS[me.weapons[me.cur].id];
@@ -482,6 +521,10 @@ export class App {
     const pref = def.scope ? this.settings.scopeSensitivity : this.settings.adsSensitivity;
     this.input.sensScale = fovRatio * (1 + (pref - 1) * z.adsE);
     this.scope.update(me.alive ? z.scopeCover : 0, z.eyepiece);
+    if (this.touch) {
+      const slot = me.weapons[me.cur];
+      this.touch.update(WNAME[slot.id], def.kind !== 'melee', slot.mag, def.magSize);
+    }
 
     this.hud.update(fdt, me, this.adapter.fighters(), info, this.loop.fps, this.settings.showFps);
     this.hud.crosshair(computeSpread(me), z.vfov, def.id, this.renderer.thirdPersonActive ? 0 : Math.max(z.adsE, z.scopeCover), me.alive && z.scopeCover < 0.5);

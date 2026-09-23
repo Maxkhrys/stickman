@@ -72,3 +72,29 @@ Third person changes presentation only. `clipCamera` sweeps a small camera volum
 `Profile` owns local earned currency, unlocks, cosmetic character inks, UTC daily contracts and mastery. Purchases occur before matches and produce the next match's primary/color options. Completion events settle rewards once per match ID. This is an offline progression store, not an anti-cheat boundary. An authoritative multiplayer service must own purchases, validate equipped inventory and sign/commit match rewards in its database.
 
 Hold the Sketch is authoritative Match state, driven by fixed ticks. Occupancy, score, rotation and winner are exposed through MatchInfo; the renderer only visualizes them. Bots reach zones through their existing waypoint and command layers. Future snapshots need objective fields plus objective stats; they require no client authority over scoring.
+
+## Stick-figure sand bodies
+
+* `sim/body.ts` is still the single skeleton for rendering **and** hitboxes. The stick-figure look is a
+  presentation layer in `render/CharacterRenderer.ts` (`STICK` radii: slim ribcage/pelvis ellipsoids, spine,
+  clavicle bar, tapered bones with joint beads). `sim/hitboxes.ts` (`HIT`) wraps those radii plus the ink
+  outline with a small deliberate margin; the hit-region and bot-difficulty tests guard both.
+* `render/sand.ts`: one shader injection for every sand surface (bodies, piles, viewmodel sand parts).
+  Grain coordinates are metric per instance (instance scale applied), with fine/coarse grains, clumps,
+  relief, a slow downhill creep, vertex roughness and a granular ink edge. Per-instance attributes
+  `aDisturb` (cohesion loss) and `aWound` (nearest wound, world space) carve local wound craters, respawn
+  reformation, low-HP weak patches and top-down death erosion by discard; the outline hull shares the field.
+* Loose grains (wound flow, footfalls, landing, speed trails, weapon formation, idle slippage) come from the
+  pooled particle system in `Effects.ts`, scaled by distance and the quality tier. Presentation never feeds
+  the simulation.
+* Quality tiers (`SAND_BUDGET`, Settings → Graphics): shader taps, particle cap, loose-grain density, pixel
+  ratio cap. Auto = Low on touch devices, High elsewhere.
+
+## Touch input
+
+`ui/TouchControls.ts` owns every finger by the control it started on (pointer capture) and only calls
+`Input.touchPress/touchRelease/touchMove/touchLook/touchScroll`. `Input.buildCommand()` merges those with
+keys and mouse into the same `InputCommand`, so touch play runs the identical fixed-tick simulation (no
+mobile-specific gameplay code). Touch look uses the same zoom-compensated `sensScale` as the mouse.
+`Input.touchMode` replaces pointer lock with a plain locked flag; emulated mouse events after a tap are
+ignored so a tap can never fire.

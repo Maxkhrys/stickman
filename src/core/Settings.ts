@@ -38,6 +38,12 @@ export interface Settings {
   mapId: 'arena' | 'bookyard';
   mode: GameMode;
   crosshairColor: string;
+  /** touch look speed multiplier (phones / tablets) */
+  touchSensitivity: number;
+  /** touch ADS button: tap to toggle, or hold */
+  touchAds: 'toggle' | 'hold';
+  /** sand / effect detail: auto picks low on touch devices, high elsewhere */
+  graphics: 'auto' | 'high' | 'medium' | 'low';
   keys: Record<Action, string>;
 }
 
@@ -64,6 +70,9 @@ export const DEFAULT_SETTINGS: Settings = {
   mapId: 'arena',
   mode: 'range',
   crosshairColor: '#1b1b24',
+  touchSensitivity: 1,
+  touchAds: 'toggle',
+  graphics: 'auto',
   keys: {
     forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', crouch: 'ShiftLeft',
     fire: 'Mouse0', ads: 'Mouse2', reload: 'KeyR', weapon1: 'Digit1', weapon2: 'Digit2', weapon3: 'Digit3', weapon4: 'Digit4',
@@ -86,6 +95,9 @@ function sanitize(p: Partial<Settings> & { volume?: number; cameraBob?: number }
   s.shoulder = s.shoulder === -1 ? -1 : 1;
   s.botCount = Math.max(1, Math.min(8, Math.round(s.botCount || 6)));
   s.fov = Math.max(70, Math.min(120, s.fov));
+  s.touchSensitivity = Math.max(0.2, Math.min(3, Number(s.touchSensitivity) || 1));
+  if (s.touchAds !== 'hold') s.touchAds = 'toggle';
+  if (!['auto', 'high', 'medium', 'low'].includes(s.graphics)) s.graphics = 'auto';
   delete (s as unknown as Record<string, unknown>).volume;
   delete (s as unknown as Record<string, unknown>).cameraBob;
   return s;

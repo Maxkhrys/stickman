@@ -43,7 +43,14 @@ Normal / Hard. V toggles first/third person, Q swaps shoulders. Completed matche
 Settings (hip / ADS / scope sensitivity, FOV, camera shake, volumes, FOV kick, damage numbers,
 render scale, difficulty, bot count, keybinds) and the profile persist in localStorage.
 
+**Phones and tablets** (landscape; portrait shows a rotate prompt): left thumb = floating analog stick,
+drag anywhere on the right half to aim, **FIRE** and **AIM** also aim when you hold and drag them, plus
+JUMP, SLIDE, R (reload), ⇄ (next weapon), camera, scores and pause buttons. AIM taps to toggle by default
+(Settings → Touch aim), touch look speed and a Graphics tier (Auto/High/Medium/Low) are in Settings.
+`?touch=1` forces the touch layout on desktop for testing, `?touch=0` disables it.
+
 Tests: `npm test` (simulation suite), `npm run test:upgrade` (armory/objective/camera checks),
+`npm run test:mobile` (multi-touch play on an iPhone-sized viewport, needs a dev server),
 `node tests/browser.mjs` and `node tests/sand.browser.mjs` (Chromium flows). `vmlab.html` (dev only)
 is a viewmodel inspection harness.
 

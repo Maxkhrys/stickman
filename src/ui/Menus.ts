@@ -278,6 +278,9 @@ export class Menus {
     slider('Weapons', 0, 1, 0.01, () => s.weaponVolume, (v) => (s.weaponVolume = v), pct);
     slider('Hit feedback', 0, 1, 0.01, () => s.feedbackVolume, (v) => (s.feedbackVolume = v), pct);
     slider('Render scale', 0.5, 1.5, 0.05, () => s.renderScale, (v) => (s.renderScale = v));
+    slider('Touch look', 0.2, 3, 0.05, () => s.touchSensitivity, (v) => (s.touchSensitivity = v));
+    card.appendChild(this.row('Touch aim', this.seg<'toggle' | 'hold'>([['toggle', 'Tap toggles'], ['hold', 'Hold']], s.touchAds, (v) => { s.touchAds = v; saveSettings(s); })));
+    card.appendChild(this.row('Graphics', this.seg<'auto' | 'high' | 'medium' | 'low'>([['auto', 'Auto'], ['high', 'High'], ['medium', 'Medium'], ['low', 'Low']], s.graphics, (v) => { s.graphics = v; saveSettings(s); this.cb.settingsChanged(); })));
     const note = document.createElement('div');
     note.className = 'small';
     note.textContent = 'ADS / scope sensitivity are on top of automatic zoom compensation: 100% keeps the same feel at every zoom.';

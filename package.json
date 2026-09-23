@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "esbuild tests/sim.test.ts --bundle --platform=node --log-level=warning --outfile=node_modules/.cache/sim.test.cjs && node node_modules/.cache/sim.test.cjs",
+    "test:mobile": "node tests/mobile.browser.mjs",
     "test:upgrade": "esbuild tests/upgrade.test.ts --bundle --platform=node --log-level=warning --outfile=node_modules/.cache/upgrade.test.cjs && node node_modules/.cache/upgrade.test.cjs"
   },
   "dependencies": {

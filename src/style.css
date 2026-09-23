@@ -217,3 +217,83 @@ button:focus-visible, input:focus-visible { outline: 3px solid #127b88; outline-
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ======================================================================
+   Touch play (phones / tablets). Only applies with body.touch, so desktop
+   layout is untouched. Landscape first; portrait shows a rotate prompt.
+   ====================================================================== */
+body.touch { touch-action: manipulation; -webkit-user-select: none; -webkit-touch-callout: none; overscroll-behavior: none; -webkit-tap-highlight-color: transparent; }
+body.touch #game { touch-action: none; }
+#touch { position: fixed; inset: 0; z-index: 3; touch-action: none; -webkit-user-select: none; user-select: none; }
+#touch.hidden { display: none; }
+body.touch #ui { z-index: 2; } /* touch controls (z 3) sit above the HUD and scope mask; they hide outside play so menus stay on top */
+/* HUD stays click-through while playing so fingers reach the controls underneath */
+body.touch #hud, body.touch #hud * { pointer-events: none !important; }
+
+#touch .stick { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; }
+#touch .stick::before { content: ''; position: absolute; left: -58px; top: -58px; width: 116px; height: 116px; border-radius: 50%;
+  border: 3px dashed rgba(27,27,36,0.55); background: radial-gradient(circle, rgba(255,255,255,0.18), rgba(201,168,120,0.16)); }
+#touch .knob { position: absolute; left: -26px; top: -26px; width: 52px; height: 52px; border-radius: 47% 53% 50% 50% / 52% 46% 54% 48%;
+  border: 3px solid rgba(27,27,36,0.8); background: rgba(251,248,241,0.55); box-shadow: 2px 2px 0 rgba(27,27,36,0.35); }
+
+/* buttons: translucent sketch blobs, slightly irregular like marker circles */
+#touch .tb { position: absolute; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  width: 64px; height: 64px; border: 3px solid rgba(27,27,36,0.72); border-radius: 48% 52% 46% 54% / 55% 47% 53% 45%;
+  background: rgba(251,248,241,0.34); color: var(--ink); font-family: var(--hand); font-size: 15px; letter-spacing: 0.5px;
+  box-shadow: 3px 3px 0 rgba(27,27,36,0.28); transition: transform 0.05s, background 0.05s; }
+#touch .tb span { pointer-events: none; text-shadow: 0 0 4px rgba(255,255,255,0.9); }
+#touch .tb small { pointer-events: none; font-family: var(--soft); font-size: 11px; line-height: 1; max-width: 70px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#touch .tb.on { background: rgba(255,210,63,0.62); transform: scale(0.94) translate(2px, 2px); box-shadow: 1px 1px 0 rgba(27,27,36,0.3); }
+#touch .tb.off { opacity: 0.35; }
+#touch .tb.hint { border-color: var(--pink); background: rgba(255,79,154,0.25); }
+#touch .tb.small { width: 44px; height: 44px; font-size: 18px; font-family: var(--soft); }
+
+/* right-thumb cluster (positions include the landscape safe areas / notch) */
+#touch .fire   { right: calc(env(safe-area-inset-right) + 34px);  bottom: calc(env(safe-area-inset-bottom) + 92px); width: 86px; height: 86px; font-size: 19px; background: rgba(255,79,154,0.3); }
+#touch .fire.on { background: rgba(255,79,154,0.62); }
+#touch .ads    { right: calc(env(safe-area-inset-right) + 142px); bottom: calc(env(safe-area-inset-bottom) + 150px); }
+#touch .jump   { right: calc(env(safe-area-inset-right) + 22px);  bottom: calc(env(safe-area-inset-bottom) + 14px); }
+#touch .crouch { right: calc(env(safe-area-inset-right) + 106px); bottom: calc(env(safe-area-inset-bottom) + 14px); }
+#touch .reload { right: calc(env(safe-area-inset-right) + 146px); bottom: calc(env(safe-area-inset-bottom) + 76px); width: 52px; height: 52px; }
+#touch .swap   { right: calc(env(safe-area-inset-right) + 40px);  bottom: calc(env(safe-area-inset-bottom) + 194px); width: 70px; height: 52px; }
+#touch .pause  { left: calc(env(safe-area-inset-left) + 10px); top: calc(env(safe-area-inset-top) + 8px); }
+#touch .board  { left: calc(env(safe-area-inset-left) + 62px); top: calc(env(safe-area-inset-top) + 8px); }
+#touch .cam    { right: calc(env(safe-area-inset-right) + 10px); top: calc(env(safe-area-inset-top) + 58px); }
+
+/* phone HUD: compact, pushed to the edges; nothing in the middle third */
+body.touch .hp { left: calc(env(safe-area-inset-left) + 116px); top: calc(env(safe-area-inset-top) + 8px); bottom: auto; width: 150px; }
+body.touch .hp .lbl { font-size: 14px; }
+body.touch .hp .num { font-size: 22px; }
+body.touch .hp .bar { height: 9px; }
+body.touch .ammo { right: calc(env(safe-area-inset-right) + 64px); top: calc(env(safe-area-inset-top) + 6px); bottom: auto; }
+body.touch .ammo .mag { font-size: 30px; }
+body.touch .ammo .res { font-size: 15px; }
+body.touch .ammo .wname { font-size: 13px; }
+body.touch .slots { display: none; }
+body.touch .reloadbar { width: 80px; }
+body.touch .top { top: calc(env(safe-area-inset-top) + 4px); }
+body.touch .top .timer { font-size: 20px; }
+body.touch .top .score { font-size: 12px; }
+body.touch .feed { right: calc(env(safe-area-inset-right) + 64px); top: calc(env(safe-area-inset-top) + 58px); font-size: 12px; gap: 2px; }
+body.touch .feed div { padding: 0 5px; border-width: 1.5px; }
+body.touch .note { bottom: auto; top: calc(env(safe-area-inset-top) + 50px); font-size: 13px; padding: 4px 10px; max-width: 46vw; }
+body.touch .stats { display: none; }
+body.touch .fps { top: auto; bottom: 2px; left: 50%; transform: translateX(-50%); }
+body.touch .notice { top: 64%; font-size: 17px; }
+body.touch .death h1 { font-size: 38px; }
+body.touch .objective-panel { top: 44px; font-size: 13px; padding: 3px 9px; }
+body.touch .dind b { top: -130px; }
+body.touch .scoreboard { min-width: 0; width: 90vw; max-height: 86vh; overflow: auto; padding: 8px 12px; font-size: 13px; }
+/* menus: scroll inside the card on short landscape screens */
+body.touch .card { max-height: calc(100dvh - 16px); padding: 14px 18px; min-width: 0; width: min(560px, 92vw); -webkit-overflow-scrolling: touch; touch-action: pan-y; }
+body.touch .btn { font-size: 20px; padding: 6px 12px; margin: 7px 0; }
+
+/* portrait: rotate prompt instead of a crushed game */
+.rotate-hint { display: none; }
+@media (orientation: portrait) {
+  body.touch .rotate-hint { position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+    background: var(--paper); background-image: repeating-linear-gradient(transparent 0 33px, rgba(80,130,220,0.3) 33px 35px); font-family: var(--hand); font-size: 24px; text-align: center; padding: 30px; }
+  body.touch .rotate-hint .phone { width: 64px; height: 110px; border: 4px solid var(--ink); border-radius: 12px 10px 14px 9px; box-shadow: 4px 4px 0 rgba(27,27,36,0.3); animation: rot 2.2s ease-in-out infinite; }
+  body.touch #touch { display: none; }
+}
+@keyframes rot { 0%, 25% { transform: rotate(0); } 55%, 100% { transform: rotate(-90deg); } }

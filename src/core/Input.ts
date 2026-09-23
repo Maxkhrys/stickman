@@ -3,6 +3,18 @@ import type { Action, Settings } from './Settings';
 
 /** Radians per mouse count at sensitivity 1 (close to Krunker/Source defaults). */
 const BASE_SENS = 0.0022;
+/** Radians per CSS pixel of touch drag at touch sensitivity 1 (~0.26 deg/px). */
+const TOUCH_SENS = 0.0046;
+
+/** Coarse-pointer device (phone / tablet) or forced with ?touch=1 / ?touch=0. */
+export function isTouchDevice(): boolean {
+  const q = new URLSearchParams(location.search).get('touch');
+  if (q === '1') return true;
+  if (q === '0') return false;
+  const coarse = matchMedia('(pointer: coarse)').matches;
+  const fine = matchMedia('(any-pointer: fine)').matches;
+  return coarse && (!fine || navigator.maxTouchPoints > 0) && navigator.maxTouchPoints > 0;
+}
 
 /**
  * Raw input -> InputCommand. Mouse deltas are applied immediately to yaw/pitch (no smoothing,
@@ -22,6 +34,13 @@ export class Input {
   onToggleCamera: (() => void) | null = null;
   onSwapShoulder: (() => void) | null = null;
   private requestingLock = false;
+  /** touch play: no pointer lock; on-screen controls feed the same command builder */
+  readonly touchMode = isTouchDevice();
+  private lastTouch = -1e9;
+  private vHeld = new Set<Action>();
+  private vLatched = new Set<Action>();
+  private moveF = 0;
+  private moveS = 0;
   private held = new Set<string>();
   private latched = new Set<string>();
   private scrollAcc = 0;
@@ -64,7 +83,9 @@ export class Input {
       this.press(e.code);
     });
     window.addEventListener('keyup', (e) => this.release(e.code));
+    if (this.touchMode) window.addEventListener('pointerdown', (e) => { if (e.pointerType !== 'mouse') this.lastTouch = performance.now(); }, { capture: true });
     window.addEventListener('mousedown', (e) => {
+      if (this.touchMode && performance.now() - this.lastTouch < 1200) return; // emulated mouse from a tap
       if (this.rebindCallback && e.target instanceof HTMLElement && e.target.closest('.rebinding')) {
         e.preventDefault();
         this.rebindCallback('Mouse' + e.button);
@@ -109,12 +130,19 @@ export class Input {
   private clear() {
     this.held.clear();
     this.latched.clear();
+    this.vHeld.clear();
+    this.vLatched.clear();
+    this.moveF = this.moveS = 0;
     this.slotReq = -1;
     this.scrollAcc = 0;
     this.onScoreboard?.(false);
   }
 
   async lock() {
+    if (this.touchMode) {
+      this.locked = true;
+      return;
+    }
     if (this.requestingLock) return;
     this.requestingLock = true;
     try {
@@ -132,12 +160,58 @@ export class Input {
   }
 
   unlock() {
+    if (this.touchMode) {
+      this.locked = false;
+      this.clear();
+      return;
+    }
     if (document.pointerLockElement) document.exitPointerLock();
+  }
+
+  // ---------------- touch: on-screen controls press the same actions as keys ----------------
+  touchPress(a: Action) {
+    if (!this.locked) return;
+    this.vHeld.add(a);
+    this.vLatched.add(a);
+    if (a === 'fire') this.lastFirePress = performance.now();
+    if (a === 'weapon1') this.slotReq = 0;
+    if (a === 'weapon2') this.slotReq = 1;
+    if (a === 'weapon3') this.slotReq = 2;
+    if (a === 'weapon4') this.slotReq = 3;
+    if (a === 'camera') this.onToggleCamera?.();
+    if (a === 'shoulder') this.onSwapShoulder?.();
+    if (a === 'scoreboard') this.onScoreboard?.(true);
+  }
+  touchRelease(a: Action) {
+    this.vHeld.delete(a);
+    if (a === 'scoreboard') this.onScoreboard?.(false);
+  }
+  touchHeld(a: Action) {
+    return this.vHeld.has(a);
+  }
+  /** analog stick: forward and strafe in -1..1 (magnitude <= 1) */
+  touchMove(forward: number, strafe: number) {
+    this.moveF = forward;
+    this.moveS = strafe;
+  }
+  /** drag in CSS pixels: applied to the view immediately, same FOV/ADS scaling as the mouse */
+  touchLook(dx: number, dy: number) {
+    if (!this.locked) return;
+    const s = TOUCH_SENS * this.settings.touchSensitivity * this.sensScale;
+    this.yaw -= dx * s;
+    this.pitch -= dy * s;
+    this.pitch = Math.max(-1.55, Math.min(1.55, this.pitch));
+    // viewmodel sway expects mouse counts; a touch pixel is roughly two counts
+    this.frameDX += dx * 2;
+    this.frameDY += dy * 2;
+  }
+  touchScroll(dir: number) {
+    if (this.locked) this.scrollAcc += dir;
   }
 
   private down(a: Action): boolean {
     const c = this.settings.keys[a];
-    return this.held.has(c) || this.latched.has(c);
+    return this.held.has(c) || this.latched.has(c) || this.vHeld.has(a) || this.vLatched.has(a);
   }
 
   /** Build the command for this tick and clear one-shot latches. */
@@ -148,8 +222,9 @@ export class Input {
     if (this.down('fire')) buttons |= BTN.FIRE;
     if (this.down('ads')) buttons |= BTN.ADS;
     if (this.down('reload')) buttons |= BTN.RELOAD;
-    const fwd = (this.down('forward') ? 1 : 0) - (this.down('back') ? 1 : 0);
-    const str = (this.down('right') ? 1 : 0) - (this.down('left') ? 1 : 0);
+    const clamp1 = (v: number) => Math.max(-1, Math.min(1, v));
+    const fwd = clamp1((this.down('forward') ? 1 : 0) - (this.down('back') ? 1 : 0) + this.moveF);
+    const str = clamp1((this.down('right') ? 1 : 0) - (this.down('left') ? 1 : 0) + this.moveS);
     const cmd: InputCommand = {
       seq: this.seq++,
       yaw: this.yaw,
@@ -163,6 +238,7 @@ export class Input {
     this.slotReq = -1;
     this.scrollAcc = 0;
     this.latched.clear();
+    this.vLatched.clear();
     return cmd;
   }
 

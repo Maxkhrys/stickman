@@ -184,6 +184,10 @@ vec3 sandSample(float scale, float creep) {
   return texture2D(uSandGrain, (vSandP.xy + vSandP.zy * 0.73) * scale + drift).rgb;
 #endif
 }
+/** one fetch: for the coarse clump / relief layer detail beyond this is invisible */
+vec3 sandSample1(float scale) {
+  return texture2D(uSandGrain, (vSandP.xy + vSandP.zy * 0.73) * scale + 0.19).rgb;
+}
 /** cohesion loss here: part-wide value, plus a crater around the part's nearest wound */
 float sandLoss() {
   float d = vSandD;
@@ -198,7 +202,7 @@ const FRAG_BODY = /* glsl */ `
 {
   vec3 g = sandSample(2.2, -0.012);          // fine grains (~3.5 mm), creeping slowly downhill
   vec3 m = sandSample(0.75, -0.006);         // coarse grains (~1 cm): still visible at combat range
-  vec3 k = sandSample(1.6, 0.0);             // clumps (G) and packed relief (B), 2-8 cm
+  vec3 k = sandSample1(1.6);                 // clumps (G) and packed relief (B), 2-8 cm
   float erode = k.b * 0.65 + g.r * 0.35;
   float loss = sandLoss();
   if (loss > 0.02 && erode < loss * 0.95 - 0.02) discard;
@@ -256,8 +260,8 @@ export function sandOutline<T extends THREE.MeshBasicMaterial>(material: T): T {
   material.onBeforeCompile = (sh) => {
     injectSand(sh, /* glsl */ `
 {
-  vec3 k = sandSample(1.6, 0.0);
-  vec3 m = sandSample(0.75, 0.0);
+  vec3 k = sandSample1(1.6);
+  vec3 m = sandSample1(0.75);
   float erode = k.b * 0.65 + m.r * 0.35;
   float loss = sandLoss();
   if (loss > 0.02 && erode < loss * 0.95 + 0.04) discard;

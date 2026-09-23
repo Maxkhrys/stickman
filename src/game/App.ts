@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Profile } from '../core/Profile';
 import { WEAPONS } from '../config/weapons';
+import { SAND } from '../render/sand';
 import { Input } from '../core/Input';
 import { FixedLoop } from '../core/Loop';
 import { loadSettings, saveSettings, type Settings } from '../core/Settings';
@@ -260,8 +261,13 @@ export class App {
         tv2.set(e.dir.x, e.dir.y, e.dir.z);
         if (!e.blocked) {
           const ink = victim ? victim.color : 0x1b1b24;
-          R.effects.burst(tv, head ? 0xffd23f : ink, head ? 8 : 5, 3.5, 0.05, 0.4, 1, tv2);
-          R.effects.burst(tv, 0x1b1b24, 3, 2.5, 0.04, 0.4, 1, tv2);
+          if (SAND.enabled) {
+            R.effects.sandBurst(tv, ink, SAND.impactGrains + (head ? 7 : 0), 3.8, tv2);
+            if (victim && !e.killed) R.characters.wound(e.victim, e.pos, victim.yaw);
+          } else {
+            R.effects.burst(tv, head ? 0xffd23f : ink, head ? 8 : 5, 3.5, 0.05, 0.4, 1, tv2);
+            R.effects.burst(tv, 0x1b1b24, 3, 2.5, 0.04, 0.4, 1, tv2);
+          }
           R.characters.hurt(e.victim, e.dir.x, e.dir.z);
         }
         if (e.attacker === local) {
@@ -305,13 +311,16 @@ export class App {
         if (!killer || !victim) break;
         this.hud.killfeed(killer, victim, e.weapon, e.headshot, e.backstab, local);
         const floorY = this.adapter.world().surfaceBelow(victim.pos.x, victim.pos.z, 0.3, victim.pos.y + 0.1);
-        R.effects.inkSplat(victim.pos.x + e.dir.x * 0.6, floorY, victim.pos.z + e.dir.z * 0.6, victim.color, e.headshot ? 2.6 : 1.8);
+        if (!SAND.enabled) R.effects.inkSplat(victim.pos.x + e.dir.x * 0.6, floorY, victim.pos.z + e.dir.z * 0.6, victim.color, e.headshot ? 2.6 : 1.8);
         R.characters.kill(victim, e.dir, e.headshot);
         if (e.headshot) {
           const h = R.characters.headOf(victim.id);
           if (h) {
-            R.effects.burst(h, victim.color, 16, 5, 0.07, 0.7, 1);
-            R.effects.burst(h, 0x1b1b24, 10, 6, 0.05, 0.7, 1);
+            if (SAND.enabled) R.effects.sandBurst(h, victim.color, 28, 4.6, tv2, SAND.pileLife);
+            else {
+              R.effects.burst(h, victim.color, 16, 5, 0.07, 0.7, 1);
+              R.effects.burst(h, 0x1b1b24, 10, 6, 0.05, 0.7, 1);
+            }
           }
         }
         if (e.killer === local && e.victim !== local) {

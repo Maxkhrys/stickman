@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { SAND, sandMaterial } from '../sand';
 
 // ============================================================================
 //  Shared viewmodel toolkit: cel-shaded (toon) materials, constant-thickness ink
@@ -45,6 +46,7 @@ export function toon(color: number): THREE.MeshToonMaterial {
   let m = toonCache.get(color);
   if (!m) {
     m = new THREE.MeshToonMaterial({ color, gradientMap: toonGradient() });
+    if (SAND.enabled) sandMaterial(m);
     toonCache.set(color, m);
   }
   return m;

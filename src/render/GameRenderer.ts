@@ -341,6 +341,7 @@ export class GameRenderer {
     this.characters.update(worldDt, fi.fighters, a, renderTime, fi.orbit || this.thirdPersonActive ? -1 : fi.spectateId, world, this.camera);
     this.hitboxes.update(fi.fighters, fi.spectateId);
     this.effects.camPos.copy(this.camera.position);
+    this.effects.setWorld(world);
     this.effects.update(worldDt);
 
     // live scope image inside the eyepiece while it rises to the eye: its field of view matches what the

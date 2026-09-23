@@ -1,13 +1,14 @@
 import * as THREE from 'three';
 import { PAL, capsuleBetween, part, rbox, tubeZ } from './kit';
+import { SAND } from '../sand';
 
 // Cartoon gloves (3 fingers + thumb) built in a "socket frame" so they can be snapped onto any
 // weapon socket. Right hand frame: origin = centre of the pistol grip where the palm sits,
 // +y up the grip, -z toward the muzzle, +x = right side of the gun. Left hand frame: origin =
 // underside of the handguard, -z forward, +y up.
 
-const GLOVE = PAL.white;
-const CUFF = PAL.pink;
+const GLOVE = SAND.enabled ? 0xbfa69a : PAL.white;
+const CUFF = SAND.enabled ? 0x86768b : PAL.pink;
 const T = 0.0012; // outline thickness
 
 export interface HandRig {
@@ -69,10 +70,10 @@ export function buildLeftGlove(): HandRig {
 export const SLEEVE_LEN = 0.42;
 export function buildSleeve(): THREE.Group {
   const g = new THREE.Group();
-  const body = part(new THREE.CylinderGeometry(0.037, 0.031, SLEEVE_LEN, 14), PAL.navy, { outline: T });
+  const body = part(new THREE.CylinderGeometry(0.037, 0.031, SLEEVE_LEN, 14), SAND.enabled ? 0x998392 : PAL.navy, { outline: T });
   body.position.y = SLEEVE_LEN / 2;
   g.add(body);
-  const stripe = part(new THREE.CylinderGeometry(0.0335, 0.0335, 0.04, 14), PAL.pink, { outline: 0 });
+  const stripe = part(new THREE.CylinderGeometry(0.0335, 0.0335, 0.04, 14), SAND.enabled ? 0xcab6a3 : PAL.pink, { outline: 0 });
   stripe.position.y = 0.06;
   g.add(stripe);
   return g;

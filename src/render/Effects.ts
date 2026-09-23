@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { makeFlashTexture, makeSplatTexture } from './textures';
+import { SAND } from './sand';
+import type { World } from '../sim/world';
 
 const MAX_PARTICLES = 600;
 const MAX_TRACERS = 32;
@@ -14,6 +16,8 @@ interface Particle {
   max: number;
   size: number;
   grav: number;
+  sand: boolean;
+  floor: number;
 }
 
 interface Tracer {
@@ -45,14 +49,16 @@ export class Effects {
   private color = new THREE.Color();
   private splats: THREE.InstancedMesh;
   private splatIdx = 0;
+  private world: World | null = null;
+  setWorld(world: World) { this.world = world; }
 
   constructor() {
-    const pg = new THREE.BoxGeometry(1, 1, 1);
+    const pg = new THREE.IcosahedronGeometry(1, 0);
     this.pMesh = new THREE.InstancedMesh(pg, new THREE.MeshBasicMaterial({ color: 0xffffff }), MAX_PARTICLES);
     this.pMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.pMesh.frustumCulled = false;
     for (let i = 0; i < MAX_PARTICLES; i++) {
-      this.particles.push({ alive: false, p: new THREE.Vector3(), v: new THREE.Vector3(), life: 0, max: 1, size: 0.05, grav: 1 });
+      this.particles.push({ alive: false, p: new THREE.Vector3(), v: new THREE.Vector3(), life: 0, max: 1, size: 0.05, grav: 1, sand: false, floor: 0 });
       dummy.scale.setScalar(0);
       dummy.updateMatrix();
       this.pMesh.setMatrixAt(i, dummy.matrix);
@@ -108,6 +114,7 @@ export class Effects {
 
   clear() {
     for (const p of this.particles) p.alive = false;
+    for (const f of this.flashes) f.s.visible = false;
     for (const t of this.tracers) {
       t.mesh.visible = false;
       t.active = false;
@@ -188,8 +195,30 @@ export class Effects {
       p.life = p.max = life * (0.6 + Math.random() * 0.6);
       p.size = size * (0.6 + Math.random() * 0.8);
       p.grav = grav;
+      p.sand = false;
       this.pMesh.setColorAt(i, this.color.set(color).offsetHSL(0, 0, (Math.random() - 0.5) * 0.15));
       spawned++;
+    }
+    if (this.pMesh.instanceColor) this.pMesh.instanceColor.needsUpdate = true;
+  }
+
+  /** Small pooled grains with real collision-surface settling. Never affects hit detection. */
+  sandBurst(pos: THREE.Vector3, color: number, count: number, speed: number, dir?: THREE.Vector3, life = 1.4) {
+    if (!SAND.enabled) return;
+    let spawned = 0;
+    for (const [i, p] of this.particles.entries()) {
+      if (p.alive) continue;
+      p.alive = p.sand = true;
+      p.p.copy(pos);
+      p.v.set(Math.random() - 0.5, Math.random() * 0.8 - 0.15, Math.random() - 0.5).normalize().multiplyScalar(speed * (0.28 + Math.random() * 0.72));
+      if (dir) p.v.addScaledVector(dir, speed * 0.72);
+      p.v.y += speed * 0.22;
+      p.max = p.life = life * (0.75 + Math.random() * 0.45);
+      p.size = SAND.grainSize * (0.55 + Math.random() * 0.8);
+      p.grav = 1;
+      p.floor = 0;
+      this.pMesh.setColorAt(i, this.color.set(color).offsetHSL(0, 0, (Math.random() - 0.5) * 0.18));
+      if (++spawned >= count) break;
     }
     if (this.pMesh.instanceColor) this.pMesh.instanceColor.needsUpdate = true;
   }
@@ -218,15 +247,17 @@ export class Effects {
       } else {
         p.v.y -= 18 * p.grav * dt;
         p.p.addScaledVector(p.v, dt);
-        if (p.p.y < 0.02) {
-          p.p.y = 0.02;
-          p.v.y *= -0.3;
-          p.v.x *= 0.7;
-          p.v.z *= 0.7;
+        // Only sample surfaces below the grain; a pile on a catwalk must stay there.
+        const floor = p.sand && this.world ? this.world.surfaceBelow(p.p.x, p.p.z, 0.005, Math.max(0, p.p.y - p.v.y * dt + 0.03)) : 0;
+        if (p.p.y < floor + p.size) {
+          p.p.y = floor + p.size;
+          p.v.y *= p.sand ? -0.12 : -0.3;
+          p.v.x *= p.sand ? 0.32 : 0.7;
+          p.v.z *= p.sand ? 0.32 : 0.7;
         }
         dummy.position.copy(p.p);
         dummy.rotation.set(p.life * 10, p.life * 7, 0);
-        dummy.scale.setScalar(p.size * Math.min(1, (p.life / p.max) * 2));
+        dummy.scale.setScalar(p.size * Math.min(1, (p.life / p.max) * (p.sand ? 6 : 2)));
       }
       dummy.updateMatrix();
       this.pMesh.setMatrixAt(i, dummy.matrix);

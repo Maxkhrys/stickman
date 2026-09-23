@@ -57,6 +57,7 @@ export class Input {
         this.rebindCallback(e.code);
         return;
       }
+      if (this.locked && e.code === 'Escape') { this.unlock(); this.onPauseRequest?.(); return; }
       if (this.locked && e.code === 'Tab') e.preventDefault();
       if (!this.locked) return;
       if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();

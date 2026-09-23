@@ -2,7 +2,7 @@
 
 ## Base and branch
 
-Base `dac8e78bb5585ea643c7b40e5304f793badb65a5` on `codex/third-person-armory`. Work branch `feat/sand-identity-v1`. The armory branch is still an open draft PR (#1) against `claude/stickfight-fps-game-58be96`. Preserve its camera, armory, extra weapons and objective changes. This PR should target the armory branch; integrate it with Claude's later work deliberately.
+Base `dac8e78bb5585ea643c7b40e5304f793badb65a5` on `codex/third-person-armory`. Work branch `feat/sand-identity-v1`. During review the armory branch advanced to `7a4ac8255cfcf9ad6b10c8e5839808001575c5ed`; its intervening input, profile, weapon portrait and browser test changes were merged into this feature branch without rewriting either parent. The armory branch is still an open draft PR (#1) against `claude/stickfight-fps-game-58be96`. Preserve its camera, armory, extra weapons and objective changes. This PR should target the armory branch; integrate it with Claude's later work deliberately.
 
 ## Implementation
 

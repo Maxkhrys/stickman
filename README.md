@@ -28,13 +28,24 @@ Or import the repo in the Vercel dashboard. No settings needed.
 | Space | jump — hold to bunny hop (jump buffer + coyote time) |
 | Shift | crouch; while running = slide with speed boost (slide-hop to keep it) |
 | LMB / RMB | fire / aim down sights (knife: quick slash / heavy stab, lunges at close targets, backstabs) |
-| R, 1 2 3, wheel | reload, weapons |
+| R, 1–4, wheel | reload, weapons (range: 4 slots with instant switching) |
+| H | toggle hit-region overlay (practice range) |
 | Tab / Esc | scoreboard / pause |
 
-Modes: **Gun Range** (dummies, distance markers, movement playground, live speed/DPS/spread readout)
-and **Free-for-all vs 6 bots** (first to 25, 6 min). Bot difficulty: Easy / Normal / Hard.
-Settings (sensitivity, ADS sensitivity, FOV (default 100), volume, camera bob, FOV kick, render scale,
-crosshair colour, keybinds) are saved to localStorage.
+Weapons: **Inkblaster** rifle, **Graphite** bolt-action quickscope sniper (head / upper chest one-shot),
+**Scribbler** SMG, **Finepoint** carbine (armory purchases), **Highlighter** pistol, **Pencil** melee.
+Fighters are made of living sand: hits tear grains from the wound, weapons form from the forearms,
+and eliminated fighters crumble (`?sand=0` shows the previous look).
+
+Modes: **Practice Range** (all weapons, dummies, hit regions, live latency/accuracy/spread readout),
+**Free-for-all** and **Hold the Sketch** capture (1–8 bots) on two arenas. Bot skill: Easy (default) /
+Normal / Hard. V toggles first/third person, Q swaps shoulders. Completed matches earn Ink/XP for the armory.
+Settings (hip / ADS / scope sensitivity, FOV, camera shake, volumes, FOV kick, damage numbers,
+render scale, difficulty, bot count, keybinds) and the profile persist in localStorage.
+
+Tests: `npm test` (simulation suite), `npm run test:upgrade` (armory/objective/camera checks),
+`node tests/browser.mjs` and `node tests/sand.browser.mjs` (Chromium flows). `vmlab.html` (dev only)
+is a viewmodel inspection harness.
 
 Weapon tuning lives in `src/config/weapons.ts`; movement in `src/config/movement.ts`.
 Architecture and the multiplayer plan: [ARCHITECTURE.md](ARCHITECTURE.md).

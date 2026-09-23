@@ -1,0 +1,79 @@
+/* Mobile presentation is capability-selected by Input, not by viewport width alone. */
+#touch-controls[hidden] { display: none !important; }
+#touch-controls { position: fixed; inset: 0; z-index: 30; pointer-events: none; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+#touch-controls * { box-sizing: border-box; touch-action: none; }
+#touch-controls button { position: absolute; pointer-events: auto; margin: 0; padding: 4px; min-width: 44px; min-height: 44px; border: 2px solid rgba(27,27,36,.66); border-radius: 16px 11px 18px 12px; background: rgba(251,248,241,.67); color: #1b1b24; font: 700 11px system-ui, sans-serif; letter-spacing: .04em; box-shadow: 2px 3px 0 rgba(27,27,36,.16); -webkit-tap-highlight-color: transparent; }
+#touch-controls button.is-down, #touch-controls button[aria-pressed="true"] { background: rgba(255,210,63,.94); border-color: #1b1b24; box-shadow: 0 1px 0 rgba(27,27,36,.3); }
+.touch-look { position: absolute; inset: 0 0 0 38%; pointer-events: auto; }
+.touch-move { position: absolute; width: 128px; height: 128px; left: calc(env(safe-area-inset-left, 0px) + 26px); bottom: calc(env(safe-area-inset-bottom, 0px) + 20px); border: 2px solid rgba(27,27,36,.35); border-radius: 50%; background: rgba(251,248,241,.28); pointer-events: auto; }
+.touch-stick { position: absolute; width: 52px; height: 52px; left: calc(50% - 26px); top: calc(50% - 26px); border-radius: 50%; border: 2px solid rgba(27,27,36,.6); background: rgba(251,248,241,.72); pointer-events: none; }
+.touch-move.is-down .touch-stick { background: rgba(255,210,63,.86); }
+.touch-move-label { position: absolute; bottom: -15px; width: 100%; text-align: center; font: 600 10px system-ui,sans-serif; opacity: .6; pointer-events: none; }
+.touch-toolbar { position: absolute; left: calc(env(safe-area-inset-left, 0px) + 12px); top: calc(env(safe-area-inset-top, 0px) + 8px); display: flex; gap: 6px; }
+#touch-controls .touch-toolbar button { position: relative; width: 48px; height: 44px; border-radius: 9px; font-size: 10px; background: rgba(251,248,241,.75); }
+#touch-controls .touch-toolbar button[aria-pressed="true"] { background: #ffd23f; }
+#touch-controls .touch-pause { top: calc(env(safe-area-inset-top, 0px) + 8px); right: calc(env(safe-area-inset-right, 0px) + 12px); width: 48px; height: 44px; font-size: 22px; border-radius: 9px; }
+#touch-controls .touch-fire { right: calc(env(safe-area-inset-right, 0px) + 84px); bottom: calc(env(safe-area-inset-bottom, 0px) + 80px); width: 80px; height: 80px; border-radius: 50%; background: rgba(251,248,241,.8); }
+.touch-fire span { display: block; font: 32px/32px system-ui,sans-serif; margin-bottom: 3px; }
+#touch-controls .touch-aim { right: calc(env(safe-area-inset-right, 0px) + 177px); bottom: calc(env(safe-area-inset-bottom, 0px) + 86px); width: 59px; height: 59px; border-radius: 50%; }
+#touch-controls .touch-jump { right: calc(env(safe-area-inset-right, 0px) + 14px); bottom: calc(env(safe-area-inset-bottom, 0px) + 135px); width: 56px; height: 54px; }
+#touch-controls .touch-crouch { right: calc(env(safe-area-inset-right, 0px) + 14px); bottom: calc(env(safe-area-inset-bottom, 0px) + 71px); width: 56px; height: 54px; }
+#touch-controls .touch-reload { right: calc(env(safe-area-inset-right, 0px) + 14px); bottom: calc(env(safe-area-inset-bottom, 0px) + 17px); width: 64px; height: 44px; font-size: 9px; }
+#touch-controls .touch-next { right: calc(env(safe-area-inset-right, 0px) + 90px); bottom: calc(env(safe-area-inset-bottom, 0px) + 17px); width: 68px; height: 44px; }
+#touch-controls .touch-prev { right: calc(env(safe-area-inset-right, 0px) + 170px); bottom: calc(env(safe-area-inset-bottom, 0px) + 17px); width: 64px; height: 44px; }
+.touch-tip { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 85px); left: 28%; right: 28%; text-align: center; font: 11px/1.4 system-ui,sans-serif; background: rgba(251,248,241,.8); padding: 6px; border-radius: 6px; animation: touch-tip-out 7s forwards; }
+@keyframes touch-tip-out { 0%,65% { opacity: 1; } 100% { opacity: 0; visibility: hidden; } }
+.touch-rotate-hint { display: none; }
+.touch-mode #game { width: 100%; height: 100%; touch-action: none; }
+.touch-mode #ui { -webkit-tap-highlight-color: transparent; }
+.touch-mode .screen { padding: calc(env(safe-area-inset-top, 0px) + 8px) calc(env(safe-area-inset-right, 0px) + 8px) calc(env(safe-area-inset-bottom, 0px) + 8px) calc(env(safe-area-inset-left, 0px) + 8px); }
+.touch-mode .card { min-width: 0; max-width: 100%; max-height: calc(100vh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 20px); max-height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 20px); overscroll-behavior: contain; touch-action: pan-y; }
+.touch-mode .card button, .touch-mode .card input, .touch-mode .card select { min-height: 44px; touch-action: manipulation; }
+.touch-mode .card .row { flex-wrap: wrap; }
+.touch-mode .card .seg { flex-wrap: wrap; }
+.touch-mode .card .help { display: none; }
+.touch-mode .main-card::after { content: 'TOUCH: left stick to move · drag right to look · AIM toggles sights · FIRE also drags to aim. Sensitivity is adjustable in Settings.'; display: block; margin-top: 12px; font: 12px/1.5 system-ui,sans-serif; opacity: .7; }
+/* Reserve the thumb zones; do not scale the entire desktop HUD over the controls. */
+.touch-mode #hud .hp { top: calc(env(safe-area-inset-top, 0px) + 60px); bottom: auto; left: calc(env(safe-area-inset-left, 0px) + 12px); width: 136px; }
+.touch-mode #hud .hp .lbl { font-size: 12px; }
+.touch-mode #hud .hp .num { font-size: 24px; }
+.touch-mode #hud .bar { height: 9px; border-width: 2px; }
+.touch-mode #hud .protect { font-size: 11px; }
+.touch-mode #hud .ammo { top: calc(env(safe-area-inset-top, 0px) + 60px); bottom: auto; right: calc(env(safe-area-inset-right, 0px) + 12px); }
+.touch-mode #hud .ammo .mag { font-size: 30px; }
+.touch-mode #hud .ammo .res { font-size: 16px; }
+.touch-mode #hud .ammo .wname { font-size: 12px; }
+.touch-mode #hud .slots { display: none; }
+.touch-mode #hud .top { top: calc(env(safe-area-inset-top, 0px) + 7px); }
+.touch-mode #hud .top .timer { font-size: 22px; }
+.touch-mode #hud .top .score { font-size: 12px; }
+.touch-mode #hud .fps { left: auto; right: calc(env(safe-area-inset-right, 0px) + 70px); top: calc(env(safe-area-inset-top, 0px) + 14px); font-size: 11px; }
+.touch-mode #hud .stats, .touch-mode #hud .note { display: none; }
+.touch-mode #hud .feed { top: calc(env(safe-area-inset-top, 0px) + 52px); right: 32%; max-width: 36%; font-size: 11px; }
+.touch-mode #hud .feed div:nth-child(n+3) { display: none; }
+.touch-mode #hud .feed .hs { font-size: 9px; }
+.touch-mode #hud .notice { top: 66%; font-size: 16px; }
+.touch-mode #hud .objective-panel { top: calc(env(safe-area-inset-top, 0px) + 47px); padding: 3px 8px; }
+.touch-mode #hud .objective-panel b { font-size: 12px; }
+.touch-mode #hud .objective-panel span { font-size: 11px; }
+.touch-mode #hud .scoreboard { width: min(560px, 90vw); min-width: 0; max-height: 70vh; overflow: auto; padding: 10px; }
+.touch-mode #hud .scoreboard h2 { font-size: 20px; }
+.touch-mode #hud .scoreboard table { font-size: 14px; }
+.touch-mode #hud .scoreboard th, .touch-mode #hud .scoreboard td { padding: 2px 6px; }
+.touch-mode #hud .death h1 { font-size: 36px; }
+.touch-mode #hud .death p { font-size: 16px; }
+@media (orientation: portrait) {
+  .touch-mode .touch-rotate-hint { display: flex; flex-direction: column; position: fixed; z-index: 40; top: calc(env(safe-area-inset-top, 0px) + 8px); left: 10px; right: 10px; text-align: center; background: #fff4a8; border: 2px solid #1b1b24; border-radius: 9px; padding: 8px; font: 13px/1.5 system-ui,sans-serif; pointer-events: none; }
+  .touch-mode .touch-rotate-hint span { font-size: 11px; }
+  .touch-mode .screen { padding-top: calc(env(safe-area-inset-top, 0px) + 82px); }
+  .touch-mode .card { max-height: calc(100vh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 100px); max-height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 100px); }
+}
+@media (max-height: 420px) and (orientation: landscape) {
+  .touch-mode .card { padding: 12px 22px; }
+  .touch-mode .main-card .title { font-size: 42px; }
+  .touch-mode .main-card .tag { font-size: 15px; margin-bottom: 8px; }
+  .touch-move { width: 110px; height: 110px; left: calc(env(safe-area-inset-left, 0px) + 18px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .touch-tip { animation: none; display: none; }
+}

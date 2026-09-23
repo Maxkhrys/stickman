@@ -1,0 +1,29 @@
+name: Mobile touch checks
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  touch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npx playwright install --with-deps chromium
+      - name: Native multi-touch browser checks
+        run: |
+          npm run dev -- --host 127.0.0.1 --port 5178 > /tmp/vite-mobile.log 2>&1 &
+          for i in $(seq 1 40); do curl -fsS http://127.0.0.1:5178/ >/dev/null && break; sleep 1; done
+          xvfb-run -a node tests/mobile.browser.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stickfight-mobile-verification
+          path: verification/mobile/

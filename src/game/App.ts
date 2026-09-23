@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { Profile } from '../core/Profile';
 import { WEAPONS } from '../config/weapons';
-import { SAND } from '../render/sand';
+import { SAND, sandTint } from '../render/sand';
 import { Input } from '../core/Input';
 import { FixedLoop } from '../core/Loop';
 import { loadSettings, saveSettings, type Settings } from '../core/Settings';
@@ -262,7 +262,7 @@ export class App {
         if (!e.blocked) {
           const ink = victim ? victim.color : 0x1b1b24;
           if (SAND.enabled) {
-            R.effects.sandBurst(tv, ink, SAND.impactGrains + (head ? 7 : 0), 3.8, tv2);
+            R.effects.sandBurst(tv, sandTint(ink).getHex(), SAND.impactGrains + (head ? 7 : 0), 3.8, tv2);
             if (victim && !e.killed) R.characters.wound(e.victim, e.pos, victim.yaw);
             const [sd, span] = this.spatial(e.pos);
             this.sfx.sandImpact(sd, span);
@@ -322,7 +322,7 @@ export class App {
         if (e.headshot) {
           const h = R.characters.headOf(victim.id);
           if (h) {
-            if (SAND.enabled) R.effects.sandBurst(h, victim.color, 28, 4.6, tv2, SAND.pileLife);
+            if (SAND.enabled) R.effects.sandBurst(h, sandTint(victim.color).getHex(), 28, 3.2, tv2, SAND.pileLife, 1.3);
             else {
               R.effects.burst(h, victim.color, 16, 5, 0.07, 0.7, 1);
               R.effects.burst(h, 0x1b1b24, 10, 6, 0.05, 0.7, 1);

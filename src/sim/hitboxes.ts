@@ -52,17 +52,21 @@ function obb(i: number, part: HitPart, c: Vec3, sk: Skeleton, hx: number, hy: nu
   return h;
 }
 
-/** Hitbox dimensions (metres). Head matches the drawn head; torso matches the drawn shirt + shorts. */
+/**
+ * Hitbox dimensions (metres). They wrap the thin stick-figure body drawn by CharacterRenderer
+ * (STICK radii + its ink outline) with a small, deliberate margin so visible contact registers:
+ * head = drawn head, torso boxes cover the ribcage/pelvis volumes, limb capsules ~1.3x bone radius.
+ */
 export const HIT = {
   headR: 0.2,
-  chest: { hx: 0.21, hy: 0.12, hz: 0.13, down: 0.12 },
-  stomach: { hx: 0.18, hy: 0.15, hz: 0.12, up: 0.05 },
-  neckR: 0.07,
-  upperArmR: 0.065,
-  forearmR: 0.06,
-  thighR: 0.085,
-  shinR: 0.075,
-  footR: 0.055,
+  chest: { hx: 0.14, hy: 0.12, hz: 0.1, down: 0.12 },
+  stomach: { hx: 0.12, hy: 0.15, hz: 0.09, up: 0.05 },
+  neckR: 0.05,
+  upperArmR: 0.05,
+  forearmR: 0.045,
+  thighR: 0.065,
+  shinR: 0.055,
+  footR: 0.045,
 };
 
 /**

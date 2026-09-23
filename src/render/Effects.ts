@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { makeFlashTexture, makeSplatTexture } from './textures';
-import { SAND, sandGrainMap } from './sand';
+import { SAND, SAND_BUDGET, sandMaterial, sandQuality } from './sand';
+import { toonGradient } from './vm/kit';
 import type { World } from '../sim/world';
 
 const MAX_PARTICLES = 600;
@@ -9,7 +10,7 @@ const MAX_HOLES = 96;
 const MAX_SPLATS = 64;
 const MAX_PILES = 12;
 
-interface Pile { alive: boolean; x: number; y: number; z: number; r: number; age: number; life: number; rot: number }
+interface Pile { alive: boolean; x: number; y: number; z: number; r: number; age: number; life: number; rot: number; grow: number }
 
 interface Particle {
   alive: boolean;
@@ -75,10 +76,10 @@ export class Effects {
 
     // settled sand mounds left by collapsed fighters (fixed pool, recycled oldest-first)
     const mound = new THREE.SphereGeometry(1, 14, 6, 0, Math.PI * 2, 0, Math.PI / 2);
-    this.pileMesh = new THREE.InstancedMesh(mound, new THREE.MeshLambertMaterial({ map: sandGrainMap() }), MAX_PILES);
+    this.pileMesh = new THREE.InstancedMesh(mound, sandMaterial(new THREE.MeshToonMaterial({ color: 0xffffff, gradientMap: toonGradient() })), MAX_PILES);
     this.pileMesh.frustumCulled = false;
     for (let i = 0; i < MAX_PILES; i++) {
-      this.piles.push({ alive: false, x: 0, y: 0, z: 0, r: 0.5, age: 0, life: 1, rot: 0 });
+      this.piles.push({ alive: false, x: 0, y: 0, z: 0, r: 0.5, age: 0, life: 1, rot: 0, grow: 1 });
       dummy.scale.setScalar(0);
       dummy.updateMatrix();
       this.pileMesh.setMatrixAt(i, dummy.matrix);
@@ -225,14 +226,14 @@ export class Effects {
   }
 
   /** A body's worth of sand gathering on the surface below, pushed along the death direction. */
-  sandPile(pos: THREE.Vector3, color: number, dir: THREE.Vector3, life = SAND.pileLife) {
+  sandPile(pos: THREE.Vector3, color: number, dir: THREE.Vector3, life = SAND.pileLife, growTime = SAND.collapseTime) {
     if (!SAND.enabled) return;
     const i = this.pileIdx;
     this.pileIdx = (this.pileIdx + 1) % MAX_PILES;
     const h = Math.hypot(dir.x, dir.z) || 1;
     const x = pos.x + (dir.x / h) * 0.35, z = pos.z + (dir.z / h) * 0.35;
     const y = this.world ? this.world.surfaceBelow(x, z, 0.25, pos.y + 0.2) : 0;
-    Object.assign(this.piles[i], { alive: true, x, y, z, r: 0.5 + Math.random() * 0.12, age: 0, life, rot: Math.random() * 6.28 });
+    Object.assign(this.piles[i], { alive: true, x, y, z, r: 0.5 + Math.random() * 0.12, age: 0, life, rot: Math.random() * 6.28, grow: growTime });
     this.pileMesh.setColorAt(i, this.color.set(color).offsetHSL(0, -0.05, -0.04));
     if (this.pileMesh.instanceColor) this.pileMesh.instanceColor.needsUpdate = true;
   }
@@ -242,12 +243,13 @@ export class Effects {
       const p = this.piles[i];
       if (!p.alive) dummy.scale.setScalar(0);
       else {
-        // gather (0.6 s ease-out), hold, then sink into the floor over the last 1.5 s
-        const grow = 1 - (1 - Math.min(1, p.age / 0.6)) ** 3;
+        // gathers as the body pours into it (ease-in: little sand at first), holds, then sinks away
+        const g = Math.min(1, p.age / p.grow);
+        const grow = g * g * (3 - 2 * g);
         const sink = Math.min(1, Math.max(0, (p.life - p.age) / 1.5));
         dummy.position.set(p.x, p.y + 0.004, p.z);
         dummy.rotation.set(0, p.rot, 0);
-        dummy.scale.set(p.r * (0.55 + 0.45 * grow), 0.2 * grow * sink + 0.001, p.r * 0.8 * (0.55 + 0.45 * grow));
+        dummy.scale.set(p.r * (0.35 + 0.65 * grow), 0.13 * grow * sink + 0.001, p.r * 0.8 * (0.35 + 0.65 * grow));
       }
       dummy.updateMatrix();
       this.pileMesh.setMatrixAt(i, dummy.matrix);
@@ -260,14 +262,16 @@ export class Effects {
     if (!SAND.enabled) return;
     let spawned = 0;
     let freeLeft = true;
-    for (let n = 0; n < MAX_PARTICLES && spawned < count; n++) {
+    // quality tier bounds the pool (phones use fewer grains); impact grains still always appear
+    const cap = Math.min(MAX_PARTICLES, SAND_BUDGET[sandQuality()].particles);
+    for (let n = 0; n < cap && spawned < count; n++) {
       // free slots first; once the pool is full, fresh grains recycle the oldest ones (round robin)
       let i = n;
       if (freeLeft && this.particles[i].alive) {
-        if (n < MAX_PARTICLES - 1) continue;
+        if (n < cap - 1) continue;
         freeLeft = false;
       }
-      if (!freeLeft) { i = this.stealIdx; this.stealIdx = (this.stealIdx + 1) % MAX_PARTICLES; }
+      if (!freeLeft) { i = this.stealIdx % cap; this.stealIdx = (this.stealIdx + 1) % cap; }
       const p = this.particles[i];
       p.alive = p.sand = true;
       p.p.copy(pos);

@@ -14,8 +14,8 @@ export const BODY = {
   spine: 0.44, // pelvis centre -> chest top (neck base)
   neck: 0.05,
   headUp: 0.19, // neck -> head centre
-  shoulderW: 0.2,
-  hipW: 0.1,
+  shoulderW: 0.17, // narrow stick-figure shoulders
+  hipW: 0.085,
   thigh: 0.45,
   shin: 0.44,
   ankleY: 0.07,
@@ -219,7 +219,7 @@ export function buildSkeleton(s: BodyState, weapon: WeaponId, out: Skeleton): Sk
       along = -S / 4 + (S / 2) * (u * u * (3 - 2 * u));
       lift = Math.sin(u * Math.PI) * liftH;
     }
-    const wide = 0.12 + 0.07 * c;
+    const wide = 0.1 + 0.07 * c;
     let ax = p.x + lR.x * side * wide + mx * along * amp + lF.x * 0.06 * c;
     let ayy = p.y + BODY.ankleY + lift * amp;
     let az = p.z + lR.z * side * wide + mz * along * amp + lF.z * 0.06 * c;

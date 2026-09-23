@@ -1,23 +1,14 @@
 import { WEAPONS, type WeaponDef } from '../config/weapons';
+import { MOVE } from '../config/movement';
+import { buildSkeleton, createSkeleton } from './body';
 import type { SimContext } from './context';
-import { chestPos, eyePos, type Fighter } from './fighter';
-import { buildHitboxes, rayCapsule, type Hitbox } from './hitboxes';
+import { eyePos, kickAt, muzzlePos, type Fighter } from './fighter';
+import { buildHitboxes, rayHitbox, raySphere, type Hitbox } from './hitboxes';
 import type { HitPart, WeaponId } from './types';
-import {
-  clamp,
-  flatForward,
-  forwardFromAngles,
-  lerp,
-  v3,
-  vaddScaled,
-  vclone,
-  vdot,
-  vnorm,
-  vsub,
-  type Vec3,
-} from './vec';
+import { clamp, flatForward, forwardFromAngles, lerp, v3, vaddScaled, vclone, vdot, vnorm, vsub, type Vec3 } from './vec';
 
 const hbScratch: Hitbox[] = [];
+const skel = createSkeleton();
 
 export interface TraceResult {
   t: number;
@@ -39,14 +30,13 @@ export function traceShot(ctx: SimContext, shooter: Fighter, o: Vec3, d: Vec3, r
     // broadphase: distance from ray to the fighter's centre
     const cx = f.pos.x - o.x, cy = f.pos.y + 0.9 - o.y, cz = f.pos.z - o.z;
     const along = cx * d.x + cy * d.y + cz * d.z;
-    if (along < -1 || along > bestT + 1.5) continue;
+    if (along < -1.5 || along > bestT + 1.5) continue;
     const px = cx - d.x * along, py = cy - d.y * along, pz = cz - d.z * along;
-    if (px * px + py * py + pz * pz > 2.5 * 2.5) continue;
+    if (px * px + py * py + pz * pz > 1.6 * 1.6) continue;
     buildHitboxes(f, hbScratch);
     for (const hb of hbScratch) {
-      const t = rayCapsule(o, d, hb.a, hb.b, hb.r);
+      const t = rayHitbox(o, d, hb);
       if (t < 0 || t >= bestT) continue;
-      // prefer head if two parts are within a hair of each other
       bestT = t;
       hitF = f;
       part = hb.part;
@@ -69,23 +59,27 @@ export function applyDamage(
 ) {
   if (!victim.alive) return;
   dmg = Math.round(dmg);
-  const dealt = Math.min(dmg, victim.hp);
+  const blocked = victim.spawnProtect > 0;
+  const dealt = blocked ? 0 : Math.min(dmg, victim.hp);
   victim.hp -= dealt;
-  victim.lastDamageTime = ctx.time;
-  victim.lastAttacker = attacker.id;
-  attacker.stats.damage += Math.round(dealt);
+  if (!blocked) {
+    victim.lastDamageTime = ctx.time;
+    victim.lastAttacker = attacker.id;
+    attacker.stats.damage += Math.round(dealt);
+  }
   const killed = victim.hp <= 0;
   ctx.events.push({
     type: 'hit',
     attacker: attacker.id,
     victim: victim.id,
-    damage: dmg,
+    damage: blocked ? 0 : dmg,
     part,
     pos: vclone(pos),
     dir: vclone(dir),
     killed,
     backstab,
     weapon,
+    blocked,
   });
   ctx.onDamaged(victim, attacker);
   if (killed) {
@@ -94,7 +88,7 @@ export function applyDamage(
     victim.deathTime = ctx.time;
     victim.stats.deaths++;
     victim.stats.streak = 0;
-    victim.respawnTimer = victim.kind === 'dummy' ? 1.5 : 3;
+    victim.respawnTimer = victim.kind === 'dummy' ? 1.2 : 3;
     if (attacker !== victim) {
       attacker.stats.kills++;
       attacker.stats.streak++;
@@ -107,19 +101,34 @@ export function applyDamage(
       weapon,
       headshot: part === 'head',
       backstab,
+      part,
       dir: vclone(dir),
     });
     ctx.onKilled(victim, attacker);
   }
 }
 
+/** ADS accuracy 0..1 (smoothstep over the weapon's accuracy window). */
+export function adsAccuracy(f: Fighter, def: WeaponDef = WEAPONS[f.weapons[f.cur].id]): number {
+  const a = clamp((f.ads - def.adsAccuracyStart) / Math.max(1e-3, def.adsAccuracyFull - def.adsAccuracyStart), 0, 1);
+  return a * a * (3 - 2 * a);
+}
+
 export function computeSpread(f: Fighter): number {
   const def = WEAPONS[f.weapons[f.cur].id];
   if (def.kind === 'melee') return 0;
+  const acc = adsAccuracy(f, def);
   const hs = Math.hypot(f.vel.x, f.vel.z);
-  let s = def.spreadBase + def.spreadMove * clamp(hs / 8.2, 0, 1.4) + (f.onGround ? 0 : def.spreadAir) + f.bloom;
-  if (f.crouching && f.onGround && !f.sliding) s *= 0.8;
-  return s * lerp(1, def.adsSpreadMult, f.ads);
+  let base = (def.spreadHip + f.bloom) * lerp(1, def.adsSpreadMult, acc);
+  if (f.crouching && f.onGround && !f.sliding) base *= 0.8;
+  const mov = (def.spreadMove * clamp(hs / MOVE.maxSpeed, 0, 1.4) + (f.onGround ? 0 : def.spreadAir)) * lerp(1, def.adsMoveSpreadMult, acc);
+  return base + mov;
+}
+
+/** Current aim angles including sustained recoil and the transient kick. */
+export function aimAngles(f: Fighter, time: number): { yaw: number; pitch: number } {
+  const k = kickAt(f, time);
+  return { yaw: f.yaw + f.recoilYaw + k.yaw, pitch: f.pitch + f.recoilPitch + k.pitch };
 }
 
 /** Direction for yaw/pitch offset by small angles (dx right, dy up). */
@@ -127,34 +136,69 @@ function offsetDir(yaw: number, pitch: number, dx: number, dy: number): Vec3 {
   const fw = forwardFromAngles(yaw, pitch);
   const rt = v3(Math.cos(yaw), 0, -Math.sin(yaw));
   const up = forwardFromAngles(yaw, pitch + Math.PI / 2);
-  return vnorm(v3(
-    fw.x + rt.x * Math.tan(dx) + up.x * Math.tan(dy),
-    fw.y + rt.y * Math.tan(dx) + up.y * Math.tan(dy),
-    fw.z + rt.z * Math.tan(dx) + up.z * Math.tan(dy),
-  ));
+  const tx = Math.tan(dx), ty = Math.tan(dy);
+  return vnorm(v3(fw.x + rt.x * tx + up.x * ty, fw.y + rt.y * tx + up.y * ty, fw.z + rt.z * tx + up.z * ty));
 }
 
+/** Nearby-cover check: distance along which the barrel (not just the eye) must be clear. */
+const OBSTRUCTION_RANGE = 1.8;
+
+/**
+ * One shot. Everything (ammo is handled by the caller) - damage, recoil, and the single 'shot' event that
+ * drives muzzle flash, tracer, sound and impact - happens here in the same tick.
+ */
 export function fireHitscan(ctx: SimContext, f: Fighter, def: WeaponDef) {
   const eye = eyePos(f);
   const spread = computeSpread(f);
   const a = ctx.rng() * Math.PI * 2;
   const r = Math.sqrt(ctx.rng()) * spread;
-  const dir = offsetDir(f.yaw + f.recoilYaw, f.pitch + f.recoilPitch, Math.cos(a) * r, Math.sin(a) * r);
-  const tr = traceShot(ctx, f, eye, dir, def.range);
+  const aim = aimAngles(f, ctx.time);
+  const dir = offsetDir(aim.yaw, aim.pitch, Math.cos(a) * r, Math.sin(a) * r);
+  let tr = traceShot(ctx, f, eye, dir, def.range);
   f.stats.shots++;
+  if (f.spawnProtect > 0) {
+    f.spawnProtect = 0;
+    ctx.events.push({ type: 'protectEnd', id: f.id });
+  }
+
+  // Barrel obstruction: the camera may see over a ledge the gun is still behind.
+  const muzzle = muzzlePos(f);
+  let obstructed = false;
+  const em = vsub(muzzle, eye);
+  const emLen = Math.hypot(em.x, em.y, em.z);
+  const gunInWall = ctx.world.raycast(eye, vnorm(em), emLen);
+  if (gunInWall) {
+    obstructed = true;
+    tr = { t: gunInWall.t, point: vaddScaled(eye, vnorm(em), gunInWall.t), normal: gunInWall.normal, fighter: null, part: null };
+  } else {
+    const near = Math.min(tr.t, OBSTRUCTION_RANGE);
+    const target = vaddScaled(eye, dir, near);
+    const mt = vsub(target, muzzle);
+    const mtLen = Math.hypot(mt.x, mt.y, mt.z);
+    if (mtLen > 0.05) {
+      const md = vnorm(mt);
+      const block = ctx.world.raycast(muzzle, md, mtLen - 0.02);
+      if (block) {
+        obstructed = true;
+        tr = { t: block.t, point: vaddScaled(muzzle, md, block.t), normal: block.normal, fighter: null, part: null };
+      }
+    }
+  }
 
   ctx.events.push({
     type: 'shot',
     id: f.id,
     weapon: def.id,
-    from: eye,
+    from: muzzle,
     to: tr.point,
+    dir,
     hitWorld: !tr.fighter && tr.normal !== null,
     normal: tr.normal,
+    obstructed,
   });
 
   if (tr.fighter && tr.part) {
-    let dmg = tr.part === 'head' ? def.headDamage : tr.part === 'body' ? def.damage : def.damage * def.limbMult;
+    let dmg = def.damage[tr.part];
     if (tr.t > def.falloffStart) {
       const k = clamp((tr.t - def.falloffStart) / (def.falloffEnd - def.falloffStart), 0, 1);
       dmg *= lerp(1, def.falloffMin, k);
@@ -164,14 +208,19 @@ export function fireHitscan(ctx: SimContext, f: Fighter, def: WeaponDef) {
     applyDamage(ctx, f, tr.fighter, dmg, tr.part, tr.point, dir, def.id);
   }
 
-  // learnable recoil pattern
+  // ---- gameplay recoil: sharp impulse + sustained learnable climb ----
+  const mult = lerp(1, def.adsRecoilMult, adsAccuracy(f, def));
+  const k = kickAt(f, ctx.time);
+  f.kickPitch = k.pitch + def.kickPitch * mult;
+  f.kickYaw = k.yaw + (ctx.rng() * 2 - 1) * def.kickYaw * mult;
+  f.kickTime = ctx.time;
+  f.kickTau = def.kickTau;
   const pat = def.recoilPattern;
   const loopLen = pat.length - def.recoilLoopFrom;
   const idx = f.shotIndex < pat.length ? f.shotIndex : def.recoilLoopFrom + ((f.shotIndex - pat.length) % Math.max(1, loopLen));
   const [rp, ry] = pat[idx];
-  const mult = lerp(1, def.adsRecoilMult, f.ads);
   f.recoilPitch = Math.min(f.recoilPitch + rp * mult, def.recoilMaxPitch);
-  f.recoilYaw += (ry + (ctx.rng() * 2 - 1) * def.recoilRandomYaw) * mult;
+  f.recoilYaw += ry * mult;
   f.shotIndex++;
   f.lastShotTime = ctx.time;
   f.bloom = Math.min(f.bloom + def.spreadPerShot, def.spreadMax);
@@ -186,7 +235,8 @@ function meleeTarget(ctx: SimContext, f: Fighter, range: number, coneDeg: number
   let bestScore = Infinity;
   for (const o of ctx.fighters) {
     if (o === f || !o.alive) continue;
-    const c = chestPos(o);
+    buildSkeleton(o, o.weapons[o.cur].id, skel);
+    const c = v3((skel.chest.x + skel.pelvis.x) / 2, (skel.chest.y + skel.pelvis.y) / 2, (skel.chest.z + skel.pelvis.z) / 2);
     const to = vsub(c, eye);
     const d = Math.hypot(to.x, to.y, to.z);
     if (d > range + 0.45) continue;
@@ -221,22 +271,24 @@ export function tryLunge(ctx: SimContext, f: Fighter): boolean {
 export function resolveMelee(ctx: SimContext, f: Fighter, heavy: boolean) {
   const md = WEAPONS.melee.melee!;
   const range = heavy ? md.heavyRange : md.lightRange;
+  if (f.spawnProtect > 0) {
+    f.spawnProtect = 0;
+    ctx.events.push({ type: 'protectEnd', id: f.id });
+  }
   const t = meleeTarget(ctx, f, range, md.coneDeg);
   if (!t) return;
   const eye = eyePos(f);
   const fw = forwardFromAngles(f.yaw, f.pitch);
-  // headshot if the crosshair ray passes through the head
-  buildHitboxes(t, hbScratch);
-  const head = hbScratch[0];
-  const head_t = rayCapsule(eye, fw, head.a, head.b, head.r + 0.05);
-  const isHead = head_t > 0 && head_t < range + 0.6;
-  // backstab: attacker is behind the victim
+  buildSkeleton(t, t.weapons[t.cur].id, skel);
+  const headT = raySphere(eye, fw, skel.head, 0.25);
+  const isHead = headT > 0 && headT < range + 0.6;
+  // backstab: attacker is behind the victim's upper body
   const vf = flatForward(t.yaw);
   const toVictim = vnorm(v3(t.pos.x - f.pos.x, 0, t.pos.z - f.pos.z));
   const backstab = vdot(vf, toVictim) > 0.45;
   let dmg = heavy ? md.heavyDamage : md.lightDamage;
   if (isHead) dmg *= md.headMult;
   if (backstab) dmg = md.backstabDamage;
-  const pos = isHead ? head.a : chestPos(t);
-  applyDamage(ctx, f, t, dmg, isHead ? 'head' : 'body', pos, fw, 'melee', backstab);
+  const pos = isHead ? vclone(skel.head) : v3((skel.chest.x + skel.pelvis.x) / 2, (skel.chest.y + skel.pelvis.y) / 2, (skel.chest.z + skel.pelvis.z) / 2);
+  applyDamage(ctx, f, t, dmg, isHead ? 'head' : 'chest', pos, fw, 'melee', backstab);
 }

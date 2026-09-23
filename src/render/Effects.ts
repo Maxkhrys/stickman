@@ -18,11 +18,18 @@ interface Particle {
 
 interface Tracer {
   mesh: THREE.Mesh;
-  life: number;
-  max: number;
+  from: THREE.Vector3;
+  dir: THREE.Vector3;
+  total: number;
+  head: number;
+  speed: number;
+  len: number;
+  thick: number;
+  active: boolean;
 }
 
 const dummy = new THREE.Object3D();
+const tv = new THREE.Vector3();
 const Z = new THREE.Vector3(0, 0, 1);
 
 export class Effects {
@@ -56,13 +63,10 @@ export class Effects {
     const tg = new THREE.BoxGeometry(1, 1, 1);
     tg.translate(0, 0, 0.5);
     for (let i = 0; i < MAX_TRACERS; i++) {
-      const m = new THREE.Mesh(
-        tg,
-        new THREE.MeshBasicMaterial({ color: 0xffe9a0, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }),
-      );
+      const m = new THREE.Mesh(tg, new THREE.MeshBasicMaterial({ color: 0xffe9a0, transparent: true, depthWrite: false }));
       m.visible = false;
       m.frustumCulled = false;
-      this.tracers.push({ mesh: m, life: 0, max: 0.08 });
+      this.tracers.push({ mesh: m, from: new THREE.Vector3(), dir: new THREE.Vector3(), total: 0, head: 0, speed: 300, len: 3, thick: 0.02, active: false });
       this.group.add(m);
     }
 
@@ -104,7 +108,10 @@ export class Effects {
 
   clear() {
     for (const p of this.particles) p.alive = false;
-    for (const t of this.tracers) t.mesh.visible = false;
+    for (const t of this.tracers) {
+      t.mesh.visible = false;
+      t.active = false;
+    }
     dummy.scale.setScalar(0);
     dummy.updateMatrix();
     for (let i = 0; i < MAX_HOLES; i++) this.holes.setMatrixAt(i, dummy.matrix);
@@ -113,16 +120,27 @@ export class Effects {
     this.splats.instanceMatrix.needsUpdate = true;
   }
 
-  tracer(from: THREE.Vector3, to: THREE.Vector3, thick = 0.018, color = 0xffe9a0) {
+  /**
+   * Short ink streak travelling from `from` to `to`. `skip` metres are skipped at the start so
+   * your own tracers never sit on top of the sight picture.
+   */
+  tracer(from: THREE.Vector3, to: THREE.Vector3, thick = 0.018, color = 0xffe9a0, skip = 0, speed = 320, len = 3.2) {
     const t = this.tracers[this.tracerIdx];
     this.tracerIdx = (this.tracerIdx + 1) % MAX_TRACERS;
-    const len = from.distanceTo(to);
-    t.mesh.position.copy(from);
-    t.mesh.lookAt(to);
-    t.mesh.scale.set(thick, thick, len);
-    t.life = t.max = 0.07;
+    t.from.copy(from);
+    t.dir.subVectors(to, from);
+    t.total = t.dir.length();
+    if (t.total < 0.05) return;
+    t.dir.divideScalar(t.total);
+    t.head = Math.min(skip, t.total);
+    t.speed = speed;
+    t.len = len;
+    t.thick = thick;
+    t.active = true;
+    t.mesh.scale.set(thick, thick, 0.001);
     (t.mesh.material as THREE.MeshBasicMaterial).color.set(color);
-    t.mesh.visible = true;
+    (t.mesh.material as THREE.MeshBasicMaterial).opacity = 0.9;
+    t.mesh.visible = false;
   }
 
   worldFlash(pos: THREE.Vector3, scale = 0.5) {
@@ -176,11 +194,18 @@ export class Effects {
     if (this.pMesh.instanceColor) this.pMesh.instanceColor.needsUpdate = true;
   }
 
-  impact(pos: THREE.Vector3, normal: THREE.Vector3) {
-    this.burst(pos, 0xffd070, 5, 5, 0.035, 0.25, 1.2, normal);
-    this.burst(pos, 0xbdb6a8, 4, 2, 0.06, 0.45, 0.6, normal);
+  /** Directional impact: sparks + paper flakes kick out along the ricochet, ink dot left behind. */
+  impact(pos: THREE.Vector3, normal: THREE.Vector3, shotDir?: THREE.Vector3) {
+    const refl = new THREE.Vector3().copy(normal);
+    if (shotDir) refl.copy(shotDir).addScaledVector(normal, -2 * shotDir.dot(normal)).normalize().lerp(normal, 0.4).normalize();
+    this.burst(pos, 0xffd070, 5, 5, 0.03, 0.2, 1.2, refl);
+    this.burst(pos, 0xe9e3d3, 5, 2.5, 0.05, 0.45, 0.7, refl);
+    this.burst(pos, 0x1b1b24, 2, 1.5, 0.035, 0.3, 1, normal);
     this.bulletHole(pos, normal);
   }
+
+  /** camera position for distance-scaled tracer width (set by the renderer each frame) */
+  readonly camPos = new THREE.Vector3();
 
   update(dt: number) {
     for (let i = 0; i < MAX_PARTICLES; i++) {
@@ -209,10 +234,28 @@ export class Effects {
     this.pMesh.instanceMatrix.needsUpdate = true;
 
     for (const t of this.tracers) {
-      if (!t.mesh.visible) continue;
-      t.life -= dt;
-      if (t.life <= 0) t.mesh.visible = false;
-      else (t.mesh.material as THREE.MeshBasicMaterial).opacity = t.life / t.max;
+      if (!t.active) continue;
+      t.head += t.speed * dt;
+      const tail = Math.max(0, t.head - t.len);
+      const head = Math.min(t.head, t.total);
+      if (tail >= t.total) {
+        t.active = false;
+        t.mesh.visible = false;
+        continue;
+      }
+      const segLen = head - tail;
+      if (segLen <= 0.01) {
+        t.mesh.visible = false;
+        continue;
+      }
+      t.mesh.visible = true;
+      t.mesh.position.copy(t.from).addScaledVector(t.dir, tail);
+      t.mesh.lookAt(tv.copy(t.from).addScaledVector(t.dir, head));
+      t.mesh.scale.z = segLen;
+      // keep ~2-3 px wide on screen regardless of distance (thin ink stroke, never a beam)
+      const mid = tv.copy(t.from).addScaledVector(t.dir, (tail + head) / 2);
+      const w = Math.max(t.thick, this.camPos.distanceTo(mid) * 0.0032);
+      t.mesh.scale.x = t.mesh.scale.y = w;
     }
     for (const f of this.flashes) {
       if (!f.s.visible) continue;

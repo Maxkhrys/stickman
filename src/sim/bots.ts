@@ -1,16 +1,21 @@
 import type { DifficultyDef } from '../config/difficulty';
 import { WEAPONS } from '../config/weapons';
+import { buildSkeleton, createSkeleton } from './body';
 import type { SimContext } from './context';
-import { chestPos, eyePos, type Fighter } from './fighter';
+import { eyePos, type Fighter } from './fighter';
 import type { NavGraph } from './nav';
 import { BTN, emptyCommand, type InputCommand } from './types';
 import { angleDiff, clamp, pitchTo, v3, vclone, vdist, vdistH, yawTo, type Vec3 } from './vec';
+import { boltCycling } from './weaponsim';
 
 export type BotState = 'patrol' | 'investigate' | 'engage' | 'cover' | 'flank' | 'retreat';
 
+const skel = createSkeleton();
+
 /**
- * Bot brain. Reads the world like a player would (LOS, hearing, damage) and outputs an InputCommand
- * every tick, so bots run through exactly the same movement/weapon code as humans.
+ * Bot brain. It perceives the world the way a player would (line of sight, a view cone, hearing,
+ * damage) and outputs one InputCommand per tick, so bots run through the exact same movement and
+ * weapon rules as humans. Difficulty only changes perception, reaction, aim and decisions.
  *
  *  patrol -> (hear) investigate -> (see) engage -> (low hp / reloading) cover -> engage
  *                                          engage -> (lost target) flank / investigate
@@ -21,10 +26,12 @@ export class BotBrain {
   stateTime = 0;
   targetId = -1;
   visible = false;
-  seenFor = 0;
+  /** continuous tracking time on the current target (drives aim settle) */
+  holdTime = 0;
   reactLeft = 0;
   lastSeen: Vec3 | null = null;
   lastSeenTime = -99;
+  lastLostTime = -99;
   heard: Vec3 | null = null;
   heardTime = -99;
 
@@ -45,14 +52,24 @@ export class BotBrain {
   strafeDir = 1;
   strafeTimer = 0;
   moveBias = 0;
+  planted = false;
   senseTimer = 0;
   stuckCheck = 0;
   stuckTime = 0;
   lastCheckPos: Vec3 = v3();
-  burstLeft = 5;
+  burstLeft = 3;
   burstPause = 0;
+  hadToken = false;
+  useAds = false;
+  private countedShot = -99;
+  /** the bot's (lagging) estimate of the target's velocity */
+  private estVel: Vec3 = v3();
+  /** previous perceived target line, for smooth-pursuit feed-forward */
+  private prevLineYaw = NaN;
+  private prevLinePitch = NaN;
   lookAround = 0;
   wantSlot = 0;
+  scopeHold = 0;
 
   constructor(
     private f: Fighter,
@@ -63,12 +80,16 @@ export class BotBrain {
     this.aimYaw = f.yaw;
   }
 
+  private rand(lo: number, hi: number) {
+    return lo + (hi - lo) * this.rng();
+  }
+
   reset() {
     this.state = 'patrol';
     this.stateTime = 0;
     this.targetId = -1;
     this.visible = false;
-    this.seenFor = 0;
+    this.holdTime = 0;
     this.lastSeen = null;
     this.path = [];
     this.goal = null;
@@ -76,6 +97,9 @@ export class BotBrain {
     this.aimYaw = this.f.yaw;
     this.aimPitch = 0;
     this.wantSlot = 0;
+    this.hadToken = false;
+    this.planted = false;
+    this.burstPause = 0;
   }
 
   private setState(s: BotState) {
@@ -86,26 +110,25 @@ export class BotBrain {
     this.goal = null;
   }
 
-  hear(pos: Vec3, time: number, loud: number) {
-    const d = vdist(pos, this.f.pos);
+  /** Gunfire / footsteps. Heard positions are approximate (no wallhack-precision). */
+  hear(src: Fighter, time: number, loud: number) {
+    const d = vdist(src.pos, this.f.pos);
     if (d > this.diff.hearing * loud) return;
-    this.heard = vclone(pos);
+    const n = this.diff.hearingNoise;
+    this.heard = v3(src.pos.x + this.rand(-n, n), src.pos.y, src.pos.z + this.rand(-n, n));
     this.heardTime = time;
   }
 
+  /** Getting hit tells you roughly where it came from - not an exact, continuous track. */
   onDamaged(attacker: Fighter, time: number) {
     if (attacker === this.f) return;
-    // pain awareness: we know roughly where it came from
     if (!this.visible || this.targetId !== attacker.id) {
-      this.targetId = attacker.id;
-      this.lastSeen = vclone(attacker.pos);
-      this.lastSeenTime = time;
-      this.heard = vclone(attacker.pos);
+      const n = this.diff.hearingNoise * 0.5;
+      this.heard = v3(attacker.pos.x + this.rand(-n, n), attacker.pos.y, attacker.pos.z + this.rand(-n, n));
       this.heardTime = time;
-      // snap-turn toward the attacker (partially)
       const e = eyePos(this.f);
-      const desired = yawTo(attacker.pos.x - e.x, attacker.pos.z - e.z);
-      this.aimYaw += angleDiff(desired, this.aimYaw) * 0.6;
+      const desired = yawTo(this.heard.x - e.x, this.heard.z - e.z);
+      this.aimYaw += angleDiff(desired, this.aimYaw) * 0.35; // flinch toward the pain, not a snap
       if (this.state === 'patrol' || this.state === 'investigate') this.setState('investigate');
     }
   }
@@ -129,25 +152,26 @@ export class BotBrain {
     return t && t.alive ? t : null;
   }
 
+  /** Genuine detection: inside the view cone (or very close / just shot us) AND line of sight. */
   private sense(ctx: SimContext) {
     const f = this.f;
     const eye = eyePos(f);
-    const fwdYaw = f.yaw;
     let best: Fighter | null = null;
     let bestScore = Infinity;
     for (const o of ctx.fighters) {
-      if (o === f || !o.alive || o.kind === 'dummy') continue;
+      if (o === f || !o.alive || o.kind === 'dummy' || o.spawnProtect > 0) continue;
       const d = vdist(o.pos, f.pos);
       if (d > 80) continue;
       const tracked = o.id === this.targetId && this.visible;
-      const yawTo_ = yawTo(o.pos.x - eye.x, o.pos.z - eye.z);
-      const inFov = Math.abs(angleDiff(yawTo_, fwdYaw)) < this.diff.fovHalf || d < 3.5 || tracked;
-      if (!inFov) continue;
-      const head = v3(o.pos.x, o.pos.y + o.height - 0.2, o.pos.z);
-      if (!ctx.world.los(eye, chestPos(o)) && !ctx.world.los(eye, head)) continue;
+      const ang = Math.abs(angleDiff(yawTo(o.pos.x - eye.x, o.pos.z - eye.z), f.yaw));
+      const shotUs = o.id === f.lastAttacker && ctx.time - f.lastDamageTime < 1.2;
+      const inView = ang < this.diff.fovHalf || d < 3.5 || (tracked && ang < 1.6) || (shotUs && ang < 1.9);
+      if (!inView) continue;
+      buildSkeleton(o, o.weapons[o.cur].id, skel);
+      if (!ctx.world.los(eye, skel.head) && !ctx.world.los(eye, skel.chest) && !ctx.world.los(eye, skel.pelvis)) continue;
       let score = d;
       if (o.id === this.targetId) score -= 10;
-      if (o.id === f.lastAttacker && ctx.time - f.lastDamageTime < 3) score -= 8;
+      if (shotUs) score -= 8;
       if (score < bestScore) {
         bestScore = score;
         best = o;
@@ -156,46 +180,55 @@ export class BotBrain {
     const wasVisible = this.visible;
     if (best) {
       const newTarget = best.id !== this.targetId;
-      const recentlySeen = !newTarget && ctx.time - this.lastSeenTime < 1.2;
       if (newTarget || !wasVisible) {
-        const [lo, hi] = this.diff.reaction;
-        const rt = lo + (hi - lo) * this.rng();
-        this.reactLeft = recentlySeen ? rt * 0.5 : rt;
-        if (newTarget) this.seenFor = 0;
+        const recent = !newTarget && ctx.time - this.lastLostTime < this.diff.memory;
+        const rt = this.rand(this.diff.reaction[0], this.diff.reaction[1]);
+        this.reactLeft = recent ? rt * this.diff.reacquire : rt;
+        this.holdTime = recent ? this.holdTime * 0.5 : 0;
         this.aimHead = this.rng() < this.diff.headChance;
+        this.useAds = this.rng() < this.diff.adsChance;
+        if (newTarget) this.estVel = v3();
+        this.prevLineYaw = NaN;
+        this.burstPause = 0;
+        this.errTimer = 0;
       }
       this.targetId = best.id;
       this.visible = true;
     } else {
+      if (wasVisible) this.lastLostTime = ctx.time;
       this.visible = false;
     }
   }
 
   think(ctx: SimContext, dt: number): InputCommand {
     const f = this.f;
+    const d = this.diff;
     const cmd = emptyCommand();
     this.stateTime += dt;
 
     this.senseTimer -= dt;
     if (this.senseTimer <= 0) {
-      this.senseTimer = 0.08 + this.rng() * 0.04;
+      this.senseTimer = 0.08 + this.rng() * 0.05;
       this.sense(ctx);
     }
     let tgt = this.target(ctx);
     if (!tgt) {
       this.visible = false;
-      if (this.targetId >= 0) {
-        this.targetId = -1;
-        this.lastSeen = null;
-      }
+      if (this.targetId >= 0 && !this.lastSeen) this.targetId = -1;
     }
     if (this.visible && tgt) {
-      this.seenFor += dt;
+      this.holdTime += dt;
       this.reactLeft -= dt;
       this.lastSeen = vclone(tgt.pos);
       this.lastSeenTime = ctx.time;
     } else {
-      this.seenFor = Math.max(0, this.seenFor - dt * 1.5);
+      this.holdTime = Math.max(0, this.holdTime - dt);
+      // memory fades: no tracking through walls beyond a brief recollection
+      if (this.lastSeen && ctx.time - this.lastSeenTime > d.memory) {
+        this.heard = this.heard ?? vclone(this.lastSeen);
+        this.lastSeen = null;
+        this.targetId = -1;
+      }
     }
 
     const hpFrac = f.hp / f.maxHp;
@@ -218,12 +251,13 @@ export class BotBrain {
         break;
       case 'engage':
         if (!tgt && !this.lastSeen) this.setState('patrol');
-        else if (hpFrac < this.diff.retreatAt && this.rng() < dt * 3 * (1.2 - this.diff.aggression)) this.setState('retreat');
-        else if (reloading && hpFrac < 0.75 && this.visible && vdist(f.pos, tgt!.pos) > 6) this.setState('cover');
+        else if (hpFrac < d.retreatAt && this.rng() < dt * 3 * (1.2 - d.aggression)) this.setState('retreat');
+        else if (reloading && hpFrac < 0.75 && this.visible && tgt && vdist(f.pos, tgt.pos) > 6) this.setState('cover');
         else if (!this.visible && ctx.time - this.lastSeenTime > 1.1) {
-          this.setState(this.rng() < this.diff.aggression ? 'flank' : 'investigate');
-          if ((this.state as BotState) === 'investigate' && this.lastSeen) {
-            this.heard = vclone(this.lastSeen);
+          const ls = this.lastSeen;
+          this.setState(this.rng() < d.aggression ? 'flank' : 'investigate');
+          if (this.state === ('investigate' as BotState) && ls) {
+            this.heard = vclone(ls);
             this.heardTime = ctx.time;
           }
         }
@@ -239,7 +273,7 @@ export class BotBrain {
         break;
       case 'flank':
         if (this.visible && this.stateTime > 0.3) this.setState('engage');
-        else if (this.arrived() && this.stateTime > 1) {
+        else if ((this.arrived() && this.stateTime > 1) || !this.lastSeen) {
           if (this.lastSeen) {
             this.heard = vclone(this.lastSeen);
             this.heardTime = ctx.time;
@@ -254,7 +288,7 @@ export class BotBrain {
     }
     tgt = this.target(ctx);
 
-    // ---------------- movement goals ----------------
+    // ---------------- movement ----------------
     let wishX = 0, wishZ = 0;
     let lookYaw: number | null = null;
     let jump = false;
@@ -286,46 +320,44 @@ export class BotBrain {
       }
     };
 
+    const sniper = slot.id === 'sniper';
     switch (this.state) {
       case 'patrol': {
         if (this.arrived() || !this.goal) randomGoal();
         follow();
-        // occasional bhop on long straightaways (hard+)
-        if (this.diff.jumpRate > 0.25 && this.rng() < dt * this.diff.jumpRate) jump = true;
+        if (d.jumpRate > 0.2 && this.rng() < dt * d.jumpRate) jump = true;
         break;
       }
       case 'investigate': {
         if (!this.goal && this.heard) this.goTo(this.heard);
         if (!follow()) {
           this.lookAround += dt;
-          lookYaw = this.aimYaw + dt * 2.5;
+          lookYaw = this.aimYaw + dt * 2.2;
         } else this.lookAround = 0;
         break;
       }
       case 'engage': {
         if (tgt && this.visible) {
-          const d = vdist(tgt.pos, f.pos);
-          const toX = (tgt.pos.x - f.pos.x) / Math.max(d, 0.01);
-          const toZ = (tgt.pos.z - f.pos.z) / Math.max(d, 0.01);
-          // strafe (perpendicular) with random direction changes
+          const dist = vdist(tgt.pos, f.pos);
+          const toX = (tgt.pos.x - f.pos.x) / Math.max(dist, 0.01);
+          const toZ = (tgt.pos.z - f.pos.z) / Math.max(dist, 0.01);
           this.strafeTimer -= dt;
           if (this.strafeTimer <= 0) {
-            this.strafeTimer = 0.35 + this.rng() * 0.7;
-            if (this.rng() < 0.7) this.strafeDir = -this.strafeDir;
+            this.strafeTimer = 0.4 + this.rng() * 0.8;
+            if (this.rng() < 0.65) this.strafeDir = -this.strafeDir;
             this.moveBias = this.rng() * 2 - 1;
           }
-          const s = this.diff.strafe * this.strafeDir;
+          const planted = this.planted || (sniper && f.ads > 0.5) || (this.useAds && f.ads > 0.5 && this.rng() < 0.02);
+          const s = planted ? 0 : d.strafe * this.strafeDir;
           wishX = -toZ * s;
           wishZ = toX * s;
-          // range control
           const melee = slot.id === 'melee';
-          const ideal = melee ? 0 : 11 + (1 - this.diff.aggression) * 8;
-          let push = clamp((d - ideal) / 6, -1, 1) * 0.8 + this.moveBias * 0.25;
+          const ideal = melee ? 0 : sniper ? 24 : 11 + (1 - d.aggression) * 8;
+          let push = planted ? 0 : clamp((dist - ideal) / 6, -1, 1) * 0.8 + this.moveBias * 0.25;
           if (melee) push = 1;
           wishX += toX * push;
           wishZ += toZ * push;
-          if (this.rng() < dt * this.diff.jumpRate) jump = true;
-          if (this.diff.strafe > 0.8 && this.rng() < dt * 0.25 && f.onGround && Math.hypot(f.vel.x, f.vel.z) > 6) crouch = true;
+          if (!planted && this.rng() < dt * d.jumpRate) jump = true;
         } else if (this.lastSeen) {
           if (!this.goal) this.goTo(this.lastSeen);
           follow();
@@ -350,7 +382,6 @@ export class BotBrain {
       }
     }
 
-    // periodic repath (targets move)
     this.repathTimer -= dt;
     if (this.repathTimer <= 0 && this.goal) {
       if ((this.state === 'engage' || this.state === 'investigate') && this.lastSeen && !this.visible) this.goTo(this.lastSeen);
@@ -366,8 +397,10 @@ export class BotBrain {
       if (wantsMove && moved < 0.5) this.stuckTime += 0.5;
       else this.stuckTime = 0;
       this.lastCheckPos = vclone(f.pos);
-      if (this.stuckTime >= 1) jump = true;
-      if (this.stuckTime >= 1) this.strafeDir = -this.strafeDir;
+      if (this.stuckTime >= 1) {
+        jump = true;
+        this.strafeDir = -this.strafeDir;
+      }
       if (this.stuckTime >= 2) {
         this.stuckTime = 0;
         this.path = [];
@@ -375,81 +408,135 @@ export class BotBrain {
       }
     }
 
-    // ---------------- aim ----------------
+    // ---------------- aim: consistent wander error + tracking lag ----------------
     const eye = eyePos(f);
     let desiredYaw = this.aimYaw;
     let desiredPitch = 0;
     let onTarget = false;
     let dist = 99;
+    let ffYaw = 0, ffPitch = 0;
     if (tgt && this.visible) {
       dist = vdist(tgt.pos, f.pos);
-      const hy = this.aimHead ? tgt.height - 0.2 : tgt.height * 0.62;
-      // slight tracking lag: aim where the target was a moment ago; shrinks as they hold you
-      const lag = 0.06 * Math.exp(-this.seenFor * this.diff.trackImprove);
-      const px = tgt.pos.x - tgt.vel.x * lag, py = tgt.pos.y + hy - tgt.vel.y * lag * 0.5, pz = tgt.pos.z - tgt.vel.z * lag;
+      buildSkeleton(tgt, tgt.weapons[tgt.cur].id, skel);
+      // a point on the torso (difficulty decides how high) or the head
+      const h = d.aimHeight;
+      const aimPt = this.aimHead
+        ? skel.head
+        : v3(skel.pelvis.x + (skel.chest.x - skel.pelvis.x) * h, skel.pelvis.y + (skel.chest.y - skel.pelvis.y) * h, skel.pelvis.z + (skel.chest.z - skel.pelvis.z) * h);
+      // human-like tracking: a delayed read of where you are, extrapolated with a velocity estimate that
+      // adapts slowly. Constant motion is tracked well; reversing direction makes them overshoot.
+      const va = 1 - Math.exp(-dt / d.velAdapt);
+      this.estVel.x += (tgt.vel.x - this.estVel.x) * va;
+      this.estVel.y += (tgt.vel.y - this.estVel.y) * va;
+      this.estVel.z += (tgt.vel.z - this.estVel.z) * va;
+      const lag = d.trackLag;
+      const px = aimPt.x + (this.estVel.x - tgt.vel.x) * lag;
+      const py = aimPt.y + (this.estVel.y - tgt.vel.y) * lag * 0.5;
+      const pz = aimPt.z + (this.estVel.z - tgt.vel.z) * lag;
       const dx = px - eye.x, dy = py - eye.y, dz = pz - eye.z;
       const trueYaw = yawTo(dx, dz);
       const truePitch = pitchTo(dy, Math.hypot(dx, dz));
-      // aim error that shrinks the longer they hold you
+      // wander error: smooth, shrinks toward a floor the longer they hold you, grows while they move
+      const ownSpeed = Math.hypot(f.vel.x, f.vel.z);
+      const amp =
+        d.aimError * (d.aimErrorFloor + (1 - d.aimErrorFloor) * Math.exp(-this.holdTime / d.errorSettle)) * (1 + 0.4 * Math.min(ownSpeed / 8, 1));
       this.errTimer -= dt;
-      const errMag = this.diff.aimError * (0.25 + 0.75 * Math.exp(-this.seenFor * this.diff.trackImprove));
       if (this.errTimer <= 0) {
-        this.errTimer = 0.2 + this.rng() * 0.25;
-        this.errTX = (this.rng() * 2 - 1) * errMag;
-        this.errTY = (this.rng() * 2 - 1) * errMag * 0.6;
+        this.errTimer = 0.35 + this.rng() * 0.3;
+        this.errTX = (this.rng() * 2 - 1) * amp;
+        // misses are mostly sideways (lagging a strafer), rarely high: hits favour the torso
+        this.errTY = (this.rng() * 2 - 1) * amp * 0.22;
       }
-      const k = 1 - Math.exp(-8 * dt);
+      const k = 1 - Math.exp(-6 * dt);
       this.errX += (this.errTX - this.errX) * k;
       this.errY += (this.errTY - this.errY) * k;
       desiredYaw = trueYaw + this.errX;
       desiredPitch = truePitch + this.errY;
-      const tol = Math.max(0.035, Math.atan2(0.3, dist)) + errMag * 0.5;
+      // smooth pursuit: follow the perceived target line's own motion (no constant trailing lag)
+      if (!Number.isNaN(this.prevLineYaw) && this.reactLeft < 0.1) {
+        ffYaw = angleDiff(trueYaw, this.prevLineYaw);
+        ffPitch = truePitch - this.prevLinePitch;
+      }
+      this.prevLineYaw = trueYaw;
+      this.prevLinePitch = truePitch;
+      const tol = (Math.max(0.02, Math.atan2(0.28, dist)) + amp * 0.4) * d.fireTolerance;
       onTarget = Math.abs(angleDiff(this.aimYaw, trueYaw)) < tol && Math.abs(this.aimPitch - truePitch) < tol;
     } else if (lookYaw !== null) {
       desiredYaw = lookYaw;
     } else if (Math.hypot(wishX, wishZ) > 0.1) {
       desiredYaw = yawTo(wishX, wishZ);
-      if (this.lastSeen && ctx.time - this.lastSeenTime < 3 && this.state !== 'retreat') {
-        desiredYaw = yawTo(this.lastSeen.x - eye.x, this.lastSeen.z - eye.z); // pre-aim
+      if (this.lastSeen && ctx.time - this.lastSeenTime < d.memory && this.state !== 'retreat') {
+        desiredYaw = yawTo(this.lastSeen.x - eye.x, this.lastSeen.z - eye.z); // pre-aim where they were
       }
     }
-    const turn = 1 - Math.exp(-this.diff.turnSpeed * dt * (this.visible ? 1 : 0.6));
-    this.aimYaw += angleDiff(desiredYaw, this.aimYaw) * turn;
-    this.aimPitch += (desiredPitch - this.aimPitch) * turn;
+    const follow_ = 1 - Math.exp(-d.turnSmooth * dt);
+    const maxTurn = d.turnRate * dt * (this.visible ? 1 : 0.8);
+    this.aimYaw += clamp(ffYaw + angleDiff(desiredYaw, this.aimYaw) * follow_, -maxTurn, maxTurn);
+    this.aimPitch += clamp(ffPitch + (desiredPitch - this.aimPitch) * follow_, -maxTurn, maxTurn);
+    if (!this.visible) this.prevLineYaw = NaN;
 
-    // ---------------- weapons ----------------
+    // ---------------- permission + trigger discipline ----------------
+    let allowed = true;
+    if (tgt && this.visible) {
+      allowed = ctx.requestAttack ? ctx.requestAttack(f, tgt) : true;
+      if (allowed && !this.hadToken) this.reactLeft = Math.max(this.reactLeft, d.tokenDelay);
+      this.hadToken = allowed;
+    } else this.hadToken = false;
+
     let fire = false;
+    let ads = false;
     if (this.burstPause > 0) this.burstPause -= dt;
-    if (tgt && this.visible && this.reactLeft <= 0 && onTarget) {
-      if (slot.id === 'melee') fire = dist < 2.6;
-      else if (slot.id === 'pistol') fire = f.fireCooldown <= 1e-6 && this.rng() < 0.35;
-      else if (this.burstPause <= 0) {
-        fire = true;
-        if (f.fireCooldown <= 1e-6 && slot.mag > 0) {
-          this.burstLeft--;
-          if (this.burstLeft <= 0) {
-            const close = dist < 12;
-            this.burstPause = close ? 0.05 : 0.16 + this.rng() * 0.2;
-            this.burstLeft = close ? 10 : 3 + Math.floor(this.rng() * 5);
-          }
+    // count real shots (the weapon may fire later in the tick than this brain runs)
+    if (f.lastShotTime > this.countedShot) {
+      this.countedShot = f.lastShotTime;
+      if (slot.id === 'ar') {
+        this.burstLeft--;
+        if (this.burstLeft <= 0) {
+          const close = tgt && this.visible && vdist(tgt.pos, f.pos) < 6;
+          this.burstPause = this.rand(d.burstPause[0], d.burstPause[1]) * (close ? 0.5 : 1);
+          this.burstLeft = Math.max(1, Math.round(this.rand(d.burst[0], d.burst[1])));
+          this.planted = this.rng() < d.plantChance;
         }
+      } else if (slot.id === 'pistol') {
+        this.burstPause = this.rand(0.14, 0.3) * (1 + d.burstPause[0]);
       }
     }
+    const canShoot = tgt && this.visible && allowed && this.reactLeft <= 0;
+    if (sniper && tgt && this.visible && dist > 7 && !reloading) {
+      // quickscope rhythm: raise, settle, fire; the bolt pulls them off the scope
+      ads = !boltCycling(f);
+      if (f.ads >= 0.95) this.scopeHold += dt;
+      else this.scopeHold = 0;
+      fire = !!canShoot && onTarget && this.scopeHold >= d.sniperSettle && slot.boltLeft <= 0 && f.fireCooldown <= 1e-6;
+    } else if (canShoot && onTarget) {
+      ads = this.useAds && dist > 8 && slot.id !== 'melee';
+      if (slot.id === 'melee') fire = dist < 2.6;
+      else fire = this.burstPause <= 0;
+    }
+    if (!this.visible) this.planted = false;
+    // keep the sights up between bursts while the target is still in view
+    if (!ads && this.useAds && tgt && this.visible && dist > 8 && slot.id !== 'melee' && slot.id !== 'sniper' && !reloading) ads = true;
 
-    // weapon selection
-    if (tgt && this.visible && dist < 2.8) this.wantSlot = 2;
-    else if (tgt && this.visible && slot.id === 'ar' && slot.mag === 0 && f.weapons[1].mag > 0 && dist < 18) this.wantSlot = 1;
-    else if (slot.id === 'melee' && (!this.visible || dist > 5)) this.wantSlot = 0;
-    else if (slot.id === 'pistol' && !this.visible && f.weapons[0].mag > 0) this.wantSlot = 0;
-    else if (slot.id === 'pistol' && slot.mag === 0) this.wantSlot = 0;
+    // ---------------- weapon selection ----------------
+    const hasSniper = f.weapons.findIndex((w) => w.id === 'sniper');
+    const primaryIdx = 0;
+    const pistolIdx = f.weapons.findIndex((w) => w.id === 'pistol');
+    const meleeIdx = f.weapons.findIndex((w) => w.id === 'melee');
+    if (tgt && this.visible && dist < 2.8 && meleeIdx >= 0) this.wantSlot = meleeIdx;
+    else if (tgt && this.visible && hasSniper >= 0 && dist < 7 && pistolIdx >= 0) this.wantSlot = pistolIdx;
+    else if (tgt && this.visible && slot.id === 'ar' && slot.mag === 0 && f.weapons[pistolIdx]?.mag > 0 && dist < 18) this.wantSlot = pistolIdx;
+    else if (slot.id === 'melee' && (!this.visible || dist > 5)) this.wantSlot = primaryIdx;
+    else if (slot.id === 'pistol' && !this.visible && f.weapons[primaryIdx].mag > 0) this.wantSlot = primaryIdx;
+    else if (slot.id === 'pistol' && slot.mag === 0) this.wantSlot = primaryIdx;
+    else if (slot.id === 'pistol' && hasSniper >= 0 && this.visible && dist > 10) this.wantSlot = primaryIdx;
     cmd.slot = this.wantSlot !== f.cur ? this.wantSlot : -1;
 
     let reload = false;
     if (def.kind === 'hitscan' && !reloading && !this.visible && slot.mag < def.magSize * 0.6) reload = true;
 
     // ---------------- build command ----------------
-    cmd.yaw = this.aimYaw - f.recoilYaw * this.diff.recoilComp;
-    cmd.pitch = clamp(this.aimPitch - f.recoilPitch * this.diff.recoilComp, -1.5, 1.5);
+    cmd.yaw = this.aimYaw - f.recoilYaw * d.recoilComp;
+    cmd.pitch = clamp(this.aimPitch - f.recoilPitch * d.recoilComp, -1.5, 1.5);
     const wl = Math.hypot(wishX, wishZ);
     if (wl > 0.05) {
       const nx = wishX / Math.max(wl, 1), nz = wishZ / Math.max(wl, 1);
@@ -460,9 +547,10 @@ export class BotBrain {
     if (jump) cmd.buttons |= BTN.JUMP;
     if (crouch) cmd.buttons |= BTN.CROUCH;
     if (fire) cmd.buttons |= BTN.FIRE;
+    if (ads) cmd.buttons |= BTN.ADS;
     if (reload) cmd.buttons |= BTN.RELOAD;
-    // semi-auto needs a fresh press each shot
-    if (slot.id === 'pistol' && fire && f.prevButtons & BTN.FIRE) cmd.buttons &= ~BTN.FIRE;
+    // semi-auto weapons need a fresh press each shot
+    if (!def.auto && fire && f.prevButtons & BTN.FIRE) cmd.buttons &= ~BTN.FIRE;
     return cmd;
   }
 
@@ -474,12 +562,12 @@ export class BotBrain {
     let bestScore = Infinity;
     for (let i = 0; i < 60; i++) {
       const n = this.nav.nodes[Math.floor(this.rng() * this.nav.nodes.length)];
-      const d = Math.hypot(n.x - f.pos.x, n.z - f.pos.z);
-      if (d > 14 || d < 2) continue;
+      const dd = Math.hypot(n.x - f.pos.x, n.z - f.pos.z);
+      if (dd > 14 || dd < 2) continue;
       const p = v3(n.x, n.y + 1.2, n.z);
       if (ctx.world.los(threat, p)) continue;
       const toThreat = Math.hypot(n.x - threat.x, n.z - threat.z);
-      const score = d - toThreat * 0.3;
+      const score = dd - toThreat * 0.3;
       if (score < bestScore) {
         bestScore = score;
         best = v3(n.x, n.y, n.z);
@@ -494,11 +582,10 @@ export class BotBrain {
     const ls = this.lastSeen;
     if (!ls) return;
     const dx = ls.x - f.pos.x, dz = ls.z - f.pos.z;
-    const d = Math.hypot(dx, dz) || 1;
+    const dd = Math.hypot(dx, dz) || 1;
     const side = this.rng() < 0.5 ? -1 : 1;
     const off = 9 + this.rng() * 5;
-    const p = v3(ls.x - (dz / d) * off * side - (dx / d) * 3, ls.y, ls.z + (dx / d) * off * side - (dz / d) * 3);
-    this.goTo(p);
+    this.goTo(v3(ls.x - (dz / dd) * off * side - (dx / dd) * 3, ls.y, ls.z + (dx / dd) * off * side - (dz / dd) * 3));
   }
 
   private pickRetreat(ctx: SimContext, tgt: Fighter | null) {
@@ -508,11 +595,11 @@ export class BotBrain {
     let bestScore = -Infinity;
     for (let i = 0; i < 40; i++) {
       const n = this.nav.nodes[Math.floor(this.rng() * this.nav.nodes.length)];
-      const d = Math.hypot(n.x - f.pos.x, n.z - f.pos.z);
-      if (d > 30) continue;
+      const dd = Math.hypot(n.x - f.pos.x, n.z - f.pos.z);
+      if (dd > 30) continue;
       const away = Math.hypot(n.x - from.x, n.z - from.z);
       const hidden = !ctx.world.los(v3(from.x, from.y + 1.6, from.z), v3(n.x, n.y + 1.2, n.z));
-      const score = away - d * 0.4 + (hidden ? 15 : 0);
+      const score = away - dd * 0.4 + (hidden ? 15 : 0);
       if (score > bestScore) {
         bestScore = score;
         best = v3(n.x, n.y, n.z);

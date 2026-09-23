@@ -2,24 +2,36 @@ import type { Difficulty, GameMode } from '../sim/types';
 
 export type Action =
   | 'forward' | 'back' | 'left' | 'right' | 'jump' | 'crouch'
-  | 'fire' | 'ads' | 'reload' | 'weapon1' | 'weapon2' | 'weapon3' | 'scoreboard';
+  | 'fire' | 'ads' | 'reload' | 'weapon1' | 'weapon2' | 'weapon3' | 'weapon4' | 'scoreboard' | 'hitboxes';
 
 export const ACTION_LABELS: Record<Action, string> = {
   forward: 'Forward', back: 'Back', left: 'Left', right: 'Right', jump: 'Jump', crouch: 'Crouch / Slide',
-  fire: 'Fire', ads: 'Aim (ADS) / Heavy', reload: 'Reload', weapon1: 'Rifle', weapon2: 'Pistol', weapon3: 'Pencil', scoreboard: 'Scoreboard',
+  fire: 'Fire', ads: 'Aim (ADS) / Heavy', reload: 'Reload', weapon1: 'Slot 1', weapon2: 'Slot 2', weapon3: 'Slot 3', weapon4: 'Slot 4',
+  scoreboard: 'Scoreboard', hitboxes: 'Hit regions (range)',
 };
 
 export interface Settings {
-  sensitivity: number; // multiplier
+  /** hip-fire mouse sensitivity multiplier */
+  sensitivity: number;
+  /** iron-sight ADS multiplier (applied on top of the automatic FOV compensation) */
   adsSensitivity: number;
+  /** sniper scope multiplier (applied on top of the automatic FOV compensation) */
+  scopeSensitivity: number;
   fov: number; // horizontal degrees
-  volume: number;
-  cameraBob: number; // 0..1
+  masterVolume: number;
+  weaponVolume: number;
+  feedbackVolume: number;
+  /** 0..1 camera bob / sway / landing dip / roll / hit shake */
+  cameraShake: number;
   fovKick: boolean;
   showFps: boolean;
+  damageNumbers: boolean;
+  showHitboxes: boolean;
   renderScale: number;
   playerName: string;
   difficulty: Difficulty;
+  botCount: number;
+  primary: 'ar' | 'sniper';
   mode: GameMode;
   crosshairColor: string;
   keys: Record<Action, string>;
@@ -27,31 +39,52 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   sensitivity: 1,
-  adsSensitivity: 0.8,
+  adsSensitivity: 1,
+  scopeSensitivity: 1,
   fov: 100,
-  volume: 0.7,
-  cameraBob: 1,
+  masterVolume: 0.7,
+  weaponVolume: 1,
+  feedbackVolume: 1,
+  cameraShake: 0.7,
   fovKick: true,
   showFps: true,
+  damageNumbers: true,
+  showHitboxes: false,
   renderScale: 1,
   playerName: 'You',
-  difficulty: 'hard',
+  difficulty: 'easy',
+  botCount: 6,
+  primary: 'ar',
   mode: 'range',
   crosshairColor: '#1b1b24',
   keys: {
     forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', crouch: 'ShiftLeft',
-    fire: 'Mouse0', ads: 'Mouse2', reload: 'KeyR', weapon1: 'Digit1', weapon2: 'Digit2', weapon3: 'Digit3', scoreboard: 'Tab',
+    fire: 'Mouse0', ads: 'Mouse2', reload: 'KeyR', weapon1: 'Digit1', weapon2: 'Digit2', weapon3: 'Digit3', weapon4: 'Digit4',
+    scoreboard: 'Tab', hitboxes: 'KeyH',
   },
 };
 
-const KEY = 'stickfight.settings.v1';
+const KEY = 'stickfight.settings.v2';
+const OLD_KEY = 'stickfight.settings.v1';
+
+function sanitize(p: Partial<Settings> & { volume?: number; cameraBob?: number }): Settings {
+  const s: Settings = { ...structuredClone(DEFAULT_SETTINGS), ...p, keys: { ...DEFAULT_SETTINGS.keys, ...(p.keys ?? {}) } };
+  if (!['easy', 'normal', 'hard'].includes(s.difficulty)) s.difficulty = 'hard';
+  if (p.volume !== undefined && p.masterVolume === undefined) s.masterVolume = p.volume;
+  if (p.cameraBob !== undefined && p.cameraShake === undefined) s.cameraShake = p.cameraBob;
+  if (s.primary !== 'ar' && s.primary !== 'sniper') s.primary = 'ar';
+  s.botCount = Math.max(1, Math.min(8, Math.round(s.botCount || 6)));
+  s.fov = Math.max(70, Math.min(120, s.fov));
+  delete (s as unknown as Record<string, unknown>).volume;
+  delete (s as unknown as Record<string, unknown>).cameraBob;
+  return s;
+}
 
 export function loadSettings(): Settings {
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = localStorage.getItem(KEY) ?? localStorage.getItem(OLD_KEY);
     if (!raw) return structuredClone(DEFAULT_SETTINGS);
-    const p = JSON.parse(raw) as Partial<Settings>;
-    return { ...structuredClone(DEFAULT_SETTINGS), ...p, keys: { ...DEFAULT_SETTINGS.keys, ...(p.keys ?? {}) } };
+    return sanitize(JSON.parse(raw));
   } catch {
     return structuredClone(DEFAULT_SETTINGS);
   }

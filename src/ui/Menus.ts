@@ -102,23 +102,51 @@ export class Menus {
       saveSettings(s);
     };
     card.appendChild(this.row('Name', name));
+    const matchRows: HTMLElement[] = [];
+    const syncMode = () => matchRows.forEach((r) => (r.style.opacity = s.mode === 'ffa' ? '1' : '0.45'));
     card.appendChild(
-      this.row('Mode', this.seg<GameMode>([['range', 'Gun Range'], ['ffa', 'FFA vs 6 bots']], s.mode, (v) => {
+      this.row('Mode', this.seg<GameMode>([['range', 'Practice Range'], ['ffa', 'Free-for-all']], s.mode, (v) => {
         s.mode = v;
         saveSettings(s);
+        syncMode();
       })),
     );
-    card.appendChild(
-      this.row('Bots', this.seg<Difficulty>([['easy', 'Easy'], ['normal', 'Normal'], ['hard', 'Hard'], ['insane', 'Insane']], s.difficulty, (v) => {
-        s.difficulty = v;
-        saveSettings(s);
-      })),
-    );
+    const diffRow = this.row('Bot skill', this.seg<Difficulty>([['easy', 'Easy'], ['normal', 'Normal'], ['hard', 'Hard']], s.difficulty, (v) => {
+      s.difficulty = v;
+      saveSettings(s);
+    }));
+    const countWrap = document.createElement('div');
+    countWrap.style.display = 'flex';
+    countWrap.style.flex = '1';
+    countWrap.style.gap = '8px';
+    const count = document.createElement('input');
+    count.type = 'range';
+    count.min = '1';
+    count.max = '8';
+    count.step = '1';
+    count.value = String(s.botCount);
+    const countVal = document.createElement('span');
+    countVal.className = 'val';
+    countVal.textContent = String(s.botCount);
+    count.oninput = () => {
+      s.botCount = parseInt(count.value, 10);
+      countVal.textContent = count.value;
+      saveSettings(s);
+    };
+    countWrap.append(count, countVal);
+    const countRow = this.row('Bots', countWrap);
+    const primRow = this.row('Primary', this.seg<'ar' | 'sniper'>([['ar', 'Inkblaster rifle'], ['sniper', 'Graphite sniper']], s.primary, (v) => {
+      s.primary = v;
+      saveSettings(s);
+    }));
+    matchRows.push(diffRow, countRow, primRow);
+    card.append(diffRow, countRow, primRow);
+    syncMode();
     card.appendChild(this.btn('PLAY', () => this.cb.play(), true));
     card.appendChild(this.btn('Settings', () => this.showSettings('main')));
     const help = document.createElement('div');
     help.className = 'help small';
-    help.innerHTML = `<kbd>WASD</kbd> move · <kbd>Space</kbd> jump (hold to bhop) · <kbd>Shift</kbd> crouch / slide · <kbd>LMB</kbd> fire · <kbd>RMB</kbd> aim / heavy · <kbd>R</kbd> reload · <kbd>1 2 3</kbd>/wheel swap · <kbd>Tab</kbd> scores · <kbd>Esc</kbd> pause`;
+    help.innerHTML = `<kbd>WASD</kbd> move · <kbd>Space</kbd> jump (hold to bhop) · <kbd>Shift</kbd> crouch / slide · <kbd>LMB</kbd> fire · <kbd>RMB</kbd> aim / scope / heavy · <kbd>R</kbd> reload · <kbd>1-4</kbd>/wheel swap · <kbd>H</kbd> hit regions (range) · <kbd>Tab</kbd> scores · <kbd>Esc</kbd> pause`;
     card.appendChild(help);
     this.main.appendChild(card);
   }
@@ -166,12 +194,20 @@ export class Menus {
       wrap.append(r, v);
       card.appendChild(this.row(label, wrap));
     };
+    const pct = (v: number) => `${Math.round(v * 100)}%`;
     slider('Sensitivity', 0.1, 4, 0.01, () => s.sensitivity, (v) => (s.sensitivity = v));
-    slider('ADS sens.', 0.2, 1.5, 0.01, () => s.adsSensitivity, (v) => (s.adsSensitivity = v));
+    slider('ADS sens.', 0.3, 1.8, 0.01, () => s.adsSensitivity, (v) => (s.adsSensitivity = v));
+    slider('Scope sens.', 0.3, 1.8, 0.01, () => s.scopeSensitivity, (v) => (s.scopeSensitivity = v));
     slider('FOV', 70, 120, 1, () => s.fov, (v) => (s.fov = v), (v) => String(v));
-    slider('Volume', 0, 1, 0.01, () => s.volume, (v) => (s.volume = v), (v) => `${Math.round(v * 100)}%`);
-    slider('Camera bob', 0, 1, 0.05, () => s.cameraBob, (v) => (s.cameraBob = v), (v) => `${Math.round(v * 100)}%`);
+    slider('Camera shake', 0, 1, 0.05, () => s.cameraShake, (v) => (s.cameraShake = v), pct);
+    slider('Master volume', 0, 1, 0.01, () => s.masterVolume, (v) => (s.masterVolume = v), pct);
+    slider('Weapons', 0, 1, 0.01, () => s.weaponVolume, (v) => (s.weaponVolume = v), pct);
+    slider('Hit feedback', 0, 1, 0.01, () => s.feedbackVolume, (v) => (s.feedbackVolume = v), pct);
     slider('Render scale', 0.5, 1.5, 0.05, () => s.renderScale, (v) => (s.renderScale = v));
+    const note = document.createElement('div');
+    note.className = 'small';
+    note.textContent = 'ADS / scope sensitivity are on top of automatic zoom compensation: 100% keeps the same feel at every zoom.';
+    card.appendChild(note);
     const tog = (label: string, get: () => boolean, set: (v: boolean) => void) =>
       card.appendChild(
         this.row(label, this.seg<'on' | 'off'>([['on', 'On'], ['off', 'Off']], get() ? 'on' : 'off', (v) => {
@@ -181,6 +217,8 @@ export class Menus {
         })),
       );
     tog('FOV kick', () => s.fovKick, (v) => (s.fovKick = v));
+    tog('Damage numbers', () => s.damageNumbers, (v) => (s.damageNumbers = v));
+    tog('Hit regions', () => s.showHitboxes, (v) => (s.showHitboxes = v));
     tog('Show FPS', () => s.showFps, (v) => (s.showFps = v));
     card.appendChild(
       this.row('Crosshair', this.seg<string>([['#1b1b24', 'Ink'], ['#ff4f9a', 'Pink'], ['#22c6e0', 'Cyan'], ['#3ddc84', 'Green']], s.crosshairColor, (v) => {
@@ -222,7 +260,7 @@ export class Menus {
     card.appendChild(
       this.btn('Reset to defaults', () => {
         const name = s.playerName;
-        Object.assign(s, structuredClone(DEFAULT_SETTINGS), { playerName: name, mode: s.mode, difficulty: s.difficulty });
+        Object.assign(s, structuredClone(DEFAULT_SETTINGS), { playerName: name, mode: s.mode, difficulty: s.difficulty, botCount: s.botCount, primary: s.primary });
         saveSettings(s);
         this.cb.settingsChanged();
         this.showSettings(this.settingsBack);

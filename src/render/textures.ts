@@ -233,3 +233,18 @@ export function makeLabelTexture(text: string): THREE.Texture {
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }
+
+/** Soft ink puff for muzzle smoke. */
+export function makeSmokeTexture(): THREE.Texture {
+  const s = 64;
+  const c = document.createElement('canvas');
+  c.width = c.height = s;
+  const g = c.getContext('2d')!;
+  const grd = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+  grd.addColorStop(0, 'rgba(255,255,255,0.9)');
+  grd.addColorStop(0.5, 'rgba(255,255,255,0.45)');
+  grd.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grd;
+  g.fillRect(0, 0, s, s);
+  return new THREE.CanvasTexture(c);
+}

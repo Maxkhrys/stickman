@@ -14,7 +14,11 @@ export class Input {
   locked = false;
   frameDX = 0;
   frameDY = 0;
-  adsFactor = 1; // current sensitivity scale applied by the game when ADS
+  /** sensitivity scale set every frame by the game (FOV compensation x ADS/scope multiplier) */
+  sensScale = 1;
+  /** timestamp of the last fire-button press (for latency measurement) */
+  lastFirePress = 0;
+  onToggleHitboxes: (() => void) | null = null;
   private held = new Set<string>();
   private latched = new Set<string>();
   private scrollAcc = 0;
@@ -37,7 +41,7 @@ export class Input {
     document.addEventListener('pointerlockerror', () => this.onPauseRequest?.());
     document.addEventListener('mousemove', (e) => {
       if (!this.locked) return;
-      const s = BASE_SENS * this.settings.sensitivity * this.adsFactor;
+      const s = BASE_SENS * this.settings.sensitivity * this.sensScale;
       this.yaw -= e.movementX * s;
       this.pitch -= e.movementY * s;
       this.pitch = Math.max(-1.55, Math.min(1.55, this.pitch));
@@ -84,6 +88,9 @@ export class Input {
     if (code === k.weapon1) this.slotReq = 0;
     if (code === k.weapon2) this.slotReq = 1;
     if (code === k.weapon3) this.slotReq = 2;
+    if (code === k.weapon4) this.slotReq = 3;
+    if (code === k.fire) this.lastFirePress = performance.now();
+    if (code === k.hitboxes) this.onToggleHitboxes?.();
     if (code === k.scoreboard) this.onScoreboard?.(true);
   }
 

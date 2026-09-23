@@ -2,7 +2,8 @@ import { MOVE } from '../config/movement';
 import { WEAPONS } from '../config/weapons';
 import type { Fighter } from './fighter';
 import { BTN, type GameEvent, type InputCommand } from './types';
-import { clamp, lerp } from './vec';
+import { angleDiff, clamp, lerp, yawTo } from './vec';
+import { strideLength } from './body';
 import type { World } from './world';
 import type { Box } from './map';
 
@@ -99,7 +100,7 @@ function moveAxis(f: Fighter, world: World, axis: 'x' | 'z', delta: number, grou
   }
 }
 
-function moveVertical(f: Fighter, world: World, dt: number, events: GameEvent[]) {
+function moveVertical(f: Fighter, world: World, dt: number, events: GameEvent[], time: number) {
   const r = MOVE.radius;
   const wasGround = f.onGround;
   let ny = f.pos.y + f.vel.y * dt;
@@ -119,6 +120,8 @@ function moveVertical(f: Fighter, world: World, dt: number, events: GameEvent[])
     if (!wasGround) {
       events.push({ type: 'land', id: f.id, speed: -f.vel.y });
       f.airTime = 0;
+      f.lastLandTime = time;
+      f.lastLandSpeed = -f.vel.y;
     }
     ny = floor;
     if (f.vel.y < 0) f.vel.y = 0;
@@ -137,7 +140,7 @@ function moveVertical(f: Fighter, world: World, dt: number, events: GameEvent[])
  * One fixed tick of character movement. Shared by players, bots and dummies (and later by
  * client-side prediction + the server) - must stay deterministic given the same inputs.
  */
-export function simulateMovement(f: Fighter, cmd: InputCommand, dt: number, world: World, events: GameEvent[]) {
+export function simulateMovement(f: Fighter, cmd: InputCommand, dt: number, world: World, events: GameEvent[], time = 0) {
   const held = cmd.buttons;
   const pressed = held & ~f.prevButtons;
   f.yaw = cmd.yaw;
@@ -222,13 +225,15 @@ export function simulateMovement(f: Fighter, cmd: InputCommand, dt: number, worl
   moveAxis(f, world, 'x', f.vel.x * dt, grounded);
   moveAxis(f, world, 'z', f.vel.z * dt, grounded);
   const wasAir = !f.onGround;
-  moveVertical(f, world, dt, events);
+  moveVertical(f, world, dt, events, time);
   if (wasAir && f.onGround && f.crouching && !f.sliding) tryStartSlide(f, events); // land into a slide
 
   // world bounds safety
   const bd = world.bounds;
   f.pos.x = clamp(f.pos.x, bd.minX + MOVE.radius, bd.maxX - MOVE.radius);
   f.pos.z = clamp(f.pos.z, bd.minZ + MOVE.radius, bd.maxZ - MOVE.radius);
+
+  updateBodyFacing(f, dt);
 
   // footsteps
   if (f.onGround && !f.sliding) {
@@ -238,5 +243,32 @@ export function simulateMovement(f: Fighter, cmd: InputCommand, dt: number, worl
       f.stepAccum = 0;
       if (!f.crouching && hs > 3) events.push({ type: 'step', id: f.id });
     }
+  }
+}
+
+const DEG = Math.PI / 180;
+
+/**
+ * Lower body turns toward the travel direction (within limits of the aim), gait phase advances by
+ * distance travelled so feet stay planted. Deterministic -> hitboxes and animation agree everywhere.
+ */
+function updateBodyFacing(f: Fighter, dt: number) {
+  const hs = Math.hypot(f.vel.x, f.vel.z);
+  let target = f.yaw;
+  if (hs > 1 && f.onGround && !f.sliding) {
+    const moveYaw = yawTo(f.vel.x, f.vel.z);
+    let rel = angleDiff(moveYaw, f.yaw);
+    // running backwards: hips face the aim, legs run in reverse
+    if (Math.abs(rel) > 110 * DEG) rel = angleDiff(moveYaw + Math.PI, f.yaw);
+    target = f.yaw + clamp(rel, -70 * DEG, 70 * DEG);
+  }
+  const d = angleDiff(target, f.lowerYaw);
+  const maxTurn = 12 * dt;
+  f.lowerYaw += clamp(d, -maxTurn, maxTurn);
+  // never let the hips drift further than 80 degrees from the aim
+  const off = angleDiff(f.lowerYaw, f.yaw);
+  if (Math.abs(off) > 80 * DEG) f.lowerYaw = f.yaw + Math.sign(off) * 80 * DEG;
+  if (f.onGround && !f.sliding && hs > 0.05) {
+    f.gait = (f.gait + ((hs * dt) / strideLength(hs)) * Math.PI * 2) % (Math.PI * 2);
   }
 }

@@ -1,9 +1,9 @@
-import { DIFFICULTY } from '../config/difficulty';
+import { DIFFICULTY, type DifficultyDef } from '../config/difficulty';
 import { MOVE } from '../config/movement';
-import { WEAPONS } from '../config/weapons';
+import { RANGE_LOADOUT, WEAPONS, matchLoadout } from '../config/weapons';
 import { BotBrain } from './bots';
 import type { SimContext } from './context';
-import { createFighter, type Fighter } from './fighter';
+import { createFighter, eyePos, type Fighter } from './fighter';
 import { MAPS, type MapDef } from './map';
 import { simulateMovement } from './movement';
 import { NavGraph } from './nav';
@@ -19,6 +19,8 @@ export interface MatchOptions {
   botCount: number;
   timeLimit: number;
   scoreLimit: number;
+  /** player's primary for matches (range always carries everything) */
+  primary?: 'ar' | 'sniper';
   seed?: number;
 }
 
@@ -32,10 +34,15 @@ export interface MatchInfo {
 }
 
 const BOT_NAMES = ['Scribble', 'Doodle', 'Twig', 'Pencil', 'Sketch', 'Noodle', 'Matchstick', 'Squiggle'];
-const COLORS = [0x1c1c22, 0xe0413a, 0x2f7de1, 0x2fb85a, 0xf0a020, 0x9b4de0, 0xe05aa8, 0x20b8c8];
+/** head colours: loud, distinct from each other and from the paper world */
+export const BOT_COLORS = [0xff4f9a, 0x2fa8ff, 0x3ddc84, 0xffb020, 0x9b5cf6, 0xff6a3d, 0x14c8c8, 0xe0e04a];
+export const PLAYER_COLOR = 0xffd23f;
 
-export const TICK_RATE = 60;
+/** 120 Hz: halves the worst-case wait between a click and the shot being simulated. */
+export const TICK_RATE = 120;
 export const TICK_DT = 1 / TICK_RATE;
+
+const SPAWN_PROTECT = 2.0;
 
 /** Authoritative simulation. On a future server this class runs as-is. */
 export class Match implements SimContext {
@@ -45,6 +52,7 @@ export class Match implements SimContext {
   readonly fighters: Fighter[] = [];
   readonly events: GameEvent[] = [];
   readonly rng: () => number;
+  readonly diff: DifficultyDef;
   time = 0;
   tick = 0;
   timeLeft: number;
@@ -52,6 +60,8 @@ export class Match implements SimContext {
   private cmds = new Map<number, InputCommand>();
   private brains = new Map<number, BotBrain>();
   private eventCursor = 0;
+  /** bots currently allowed to shoot at a human (limits how many engage you at once) */
+  private attackers = new Map<number, number>();
 
   constructor(readonly opts: MatchOptions) {
     this.map = opts.mode === 'range' ? MAPS.range : MAPS.arena;
@@ -59,22 +69,24 @@ export class Match implements SimContext {
     this.nav = new NavGraph(this.world, 2);
     this.rng = mulberry32(opts.seed ?? (Math.random() * 1e9) | 0);
     this.timeLeft = opts.mode === 'range' ? Infinity : opts.timeLimit;
+    this.diff = DIFFICULTY[opts.difficulty];
 
-    const player = createFighter(0, opts.playerName || 'You', COLORS[0], 'player');
+    const playerLoadout = opts.mode === 'range' ? RANGE_LOADOUT : matchLoadout(opts.primary ?? 'ar');
+    const player = createFighter(0, opts.playerName || 'You', PLAYER_COLOR, 'player', playerLoadout);
     this.fighters.push(player);
 
     if (opts.mode === 'ffa') {
-      const diff = DIFFICULTY[opts.difficulty];
-      for (let i = 0; i < opts.botCount; i++) {
-        const b = createFighter(i + 1, BOT_NAMES[i % BOT_NAMES.length], COLORS[(i + 1) % COLORS.length], 'bot');
+      const count = Math.max(1, Math.min(8, Math.round(opts.botCount)));
+      for (let i = 0; i < count; i++) {
+        const primary = i < this.diff.sniperBots ? 'sniper' : 'ar';
+        const b = createFighter(i + 1, BOT_NAMES[i % BOT_NAMES.length], BOT_COLORS[i % BOT_COLORS.length], 'bot', matchLoadout(primary));
         this.fighters.push(b);
-        this.brains.set(b.id, new BotBrain(b, diff, this.nav, this.rng));
+        this.brains.set(b.id, new BotBrain(b, this.diff, this.nav, this.rng));
       }
     } else {
       this.map.dummies.forEach((d, i) => {
-        const f = createFighter(100 + i, `Dummy ${i + 1}`, 0xf07a3a, 'dummy');
+        const f = createFighter(100 + i, `Dummy ${i + 1}`, 0xff8a3d, 'dummy', ['melee']);
         f.dummy = d;
-        f.maxHp = 100;
         this.fighters.push(f);
       });
     }
@@ -108,14 +120,54 @@ export class Match implements SimContext {
   }
 
   onKilled(victim: Fighter, killer: Fighter) {
+    this.attackers.delete(victim.id);
     if (this.opts.mode === 'ffa' && killer.stats.kills >= this.opts.scoreLimit) this.endMatch();
-    void victim;
+  }
+
+  /**
+   * Attack tokens: at most `diff.maxAttackers` bots may shoot at a human at the same time, so you can
+   * finish a fight before the whole arena piles on. Bots vs bots are unrestricted.
+   */
+  requestAttack(bot: Fighter, target: Fighter): boolean {
+    if (target.kind !== 'player') return true;
+    for (const [id, t] of this.attackers) if (this.time - t > 0.4) this.attackers.delete(id);
+    if (this.attackers.has(bot.id) || this.attackers.size < this.diff.maxAttackers) {
+      this.attackers.set(bot.id, this.time);
+      return true;
+    }
+    return false;
   }
 
   private endMatch() {
     if (this.ended) return;
     this.ended = true;
     this.events.push({ type: 'matchEnd' });
+  }
+
+  /** Spawn scoring: far from enemies AND out of their line of sight. */
+  private pickSpawn(f: Fighter): { pos: ReturnType<typeof v3>; yaw: number } {
+    const spawns = this.map.spawns;
+    let best = -Infinity;
+    let pick = spawns[0];
+    const enemies = this.fighters.filter((o) => o !== f && o.alive && o.kind !== 'dummy');
+    for (const s of spawns) {
+      let minD = 60;
+      let seen = false;
+      const head = v3(s.pos.x, s.pos.y + 1.6, s.pos.z);
+      for (const o of enemies) {
+        const d = vdist(o.pos, s.pos);
+        minD = Math.min(minD, d);
+        if (!seen && d < 75 && this.world.los(eyePos(o), head)) seen = true;
+      }
+      let score = minD + this.rng() * 5;
+      if (seen) score -= 45;
+      if (minD < 10) score -= 30;
+      if (score > best) {
+        best = score;
+        pick = s;
+      }
+    }
+    return { pos: v3(pick.pos.x, pick.pos.y, pick.pos.z), yaw: pick.yaw };
   }
 
   private respawn(f: Fighter, initial = false) {
@@ -125,30 +177,17 @@ export class Match implements SimContext {
       pos = v3(f.dummy.pos.x, f.dummy.pos.y, f.dummy.pos.z);
       yaw = f.dummy.yaw;
     } else {
-      // farthest spawn from living enemies
-      let best = -Infinity;
-      const spawns = this.map.spawns;
-      const offset = Math.floor(this.rng() * spawns.length);
-      for (let i = 0; i < spawns.length; i++) {
-        const s = spawns[(i + offset) % spawns.length];
-        let minD = 1000;
-        for (const o of this.fighters) {
-          if (o === f || !o.alive) continue;
-          minD = Math.min(minD, vdist(o.pos, s.pos));
-        }
-        const score = minD + this.rng() * 6 - (initial ? 0 : 0);
-        if (score > best) {
-          best = score;
-          pos = v3(s.pos.x, s.pos.y, s.pos.z);
-          yaw = s.yaw;
-        }
-      }
+      const sp = this.pickSpawn(f);
+      pos = sp.pos;
+      yaw = sp.yaw;
     }
     vcopy(f.pos, pos);
     vcopy(f.prevPos, pos);
     f.vel = v3();
     f.yaw = f.prevYaw = yaw;
+    f.lowerYaw = f.prevLowerYaw = yaw;
     f.pitch = f.prevPitch = 0;
+    f.gait = f.prevGait = 0;
     f.hp = f.maxHp;
     f.alive = true;
     f.onGround = true;
@@ -158,14 +197,24 @@ export class Match implements SimContext {
     f.cur = 0;
     f.switchTimer = WEAPONS[f.weapons[0].id].drawTime;
     f.reloadTimer = 0;
+    f.reloadInserted = false;
     f.fireCooldown = 0;
+    f.fireQueuedAt = -99;
+    f.fireLock = true; // must release fire after spawning: no accidental shots
     f.meleeWindup = 0;
     f.recoilPitch = f.recoilYaw = f.prevRecoilPitch = f.prevRecoilYaw = 0;
+    f.kickPitch = f.kickYaw = 0;
+    f.kickTime = -99;
     f.bloom = 0;
-    f.ads = 0;
+    f.ads = f.prevAds = 0;
     f.shotIndex = 0;
     f.lastDamageTime = -99;
-    for (const w of f.weapons) w.mag = WEAPONS[w.id].magSize;
+    f.spawnProtect = f.kind === 'dummy' || this.opts.mode === 'range' || initial ? 0 : SPAWN_PROTECT;
+    for (const w of f.weapons) {
+      w.mag = WEAPONS[w.id].magSize;
+      w.boltLeft = 0;
+    }
+    this.attackers.delete(f.id);
     this.brains.get(f.id)?.reset();
     this.events.push({ type: 'spawn', id: f.id });
   }
@@ -197,9 +246,12 @@ export class Match implements SimContext {
       f.prevYaw = f.yaw;
       f.prevPitch = f.pitch;
       f.prevHeight = f.height;
+      f.prevLowerYaw = f.lowerYaw;
+      f.prevGait = f.gait;
       f.prevRecoilPitch = f.recoilPitch;
       f.prevRecoilYaw = f.recoilYaw;
     }
+    const wopts = { instantSwitch: this.opts.mode === 'range' };
 
     for (const f of this.fighters) {
       if (!f.alive) {
@@ -213,9 +265,13 @@ export class Match implements SimContext {
       else if (f.kind === 'bot') cmd = this.brains.get(f.id)!.think(this, dt);
       else cmd = this.dummyCommand(f, dt);
 
-      simulateMovement(f, cmd, dt, this.world, this.events);
-      updateWeapon(this, f, cmd, dt);
+      simulateMovement(f, cmd, dt, this.world, this.events, this.time);
+      updateWeapon(this, f, cmd, dt, wopts);
       f.prevButtons = cmd.buttons;
+      if (f.spawnProtect > 0) {
+        f.spawnProtect = Math.max(0, f.spawnProtect - dt);
+        if (f.spawnProtect === 0) this.events.push({ type: 'protectEnd', id: f.id });
+      }
 
       // Krunker-style regen after a few seconds out of combat
       if (f.alive && f.hp < f.maxHp && this.time - f.lastDamageTime > (f.kind === 'dummy' ? 2.5 : 5)) {
@@ -231,7 +287,7 @@ export class Match implements SimContext {
       const src = this.fighters.find((x) => x.id === e.id);
       if (!src) continue;
       const loud = e.type === 'shot' ? 1 : e.type === 'melee' ? 0.25 : 0.2;
-      for (const [id, brain] of this.brains) if (id !== src.id) brain.hear(src.pos, this.time, loud);
+      for (const [id, brain] of this.brains) if (id !== src.id) brain.hear(src, this.time, loud);
     }
     this.eventCursor = this.events.length;
 

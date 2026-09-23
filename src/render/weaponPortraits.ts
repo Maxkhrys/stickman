@@ -30,15 +30,13 @@ export function weaponPortraits(): Partial<Record<PrimaryId, string>> {
     scene.remove(model);
   }
   const geometries = new Set<THREE.BufferGeometry>();
-  const materials = new Set<THREE.Material>();
   for (const rig of Object.values(rigs)) rig.root.traverse(o => {
     if (o instanceof THREE.Mesh) {
       geometries.add(o.geometry);
-      for (const m of Array.isArray(o.material) ? o.material : [o.material]) materials.add(m);
     }
   });
   geometries.forEach(g => g.dispose());
-  materials.forEach(m => m.dispose());
+  // Toon/outline materials are shared with the live viewmodel; do not dispose them here.
   renderer.dispose(); renderer.forceContextLoss();
   return cache;
 }

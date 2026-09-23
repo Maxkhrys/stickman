@@ -300,8 +300,9 @@ export class GameRenderer {
         };
         const safe = clipCamera(world, pivot, desired);
         this.camera.position.set(safe.x, safe.y, safe.z);
-        // Hide the local body if a wall forces the camera into it.
-        if (Math.hypot(safe.x - px, safe.z - pz) < 0.55) { this.thirdPersonActive = false; this.camera.position.set(px + bobX * cy, camY, pz - bobX * sy); }
+        // Hide the local body only if collision pulled the camera into it (3D, so looking straight
+        // up or down keeps the over-the-shoulder view instead of dropping to first person).
+        if (Math.hypot(safe.x - pivot.x, safe.y - pivot.y, safe.z - pivot.z) < 0.55) { this.thirdPersonActive = false; this.camera.position.set(px + bobX * cy, camY, pz - bobX * sy); }
       }
 
       // ---- FOV: speed kick at hip, iron-sight zoom, scope zoom synced with the overlay ----

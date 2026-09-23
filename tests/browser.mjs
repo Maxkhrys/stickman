@@ -30,7 +30,9 @@ try {
   check('Third person active', await page.evaluate(() => window.stickfight.renderer.thirdPersonActive));
   await page.screenshot({ path: 'verification/third-person.png' });
   const start = await page.evaluate(() => ({ ...window.stickfight.adapter.fighters()[0].pos }));
-  await page.keyboard.down('KeyW'); await page.waitForTimeout(250); await page.keyboard.up('KeyW');
+  await page.keyboard.down('w');
+  await page.waitForFunction(start => { const p = window.stickfight.adapter.fighters()[0].pos; return Math.hypot(p.x - start.x, p.z - start.z) > 0.3; }, start, { timeout: 15000 });
+  await page.keyboard.up('w');
   check('Real movement input', await page.evaluate(start => { const p = window.stickfight.adapter.fighters()[0].pos; return Math.hypot(p.x - start.x, p.z - start.z) > 0.1; }, start));
   await page.keyboard.press('KeyQ');
   check('Shoulder key swaps camera', await page.evaluate(() => window.stickfight.settings.shoulder === -1));
@@ -39,12 +41,17 @@ try {
   // All weapon rigs must render in hip, ADS and reload, including the new unlocks.
   for (const id of ['ar', 'sniper', 'pistol', 'melee', 'smg', 'carbine']) {
     await page.evaluate(id => { const a = window.stickfight; const f = a.adapter.fighters()[0]; a.input.slotReq = f.weapons.findIndex(w => w.id === id); }, id);
-    await page.waitForTimeout(160);
-    await page.mouse.down({ button: 'right' }); await page.waitForTimeout(400); await draw();
+    await page.waitForFunction(id => { const f = window.stickfight.adapter.fighters()[0]; return f.weapons[f.cur].id === id && f.switchTimer === 0; }, id);
+    await page.mouse.down({ button: 'right' });
+    if (id !== 'melee') await page.waitForFunction(() => window.stickfight.adapter.fighters()[0].ads > 0.98);
+    await draw();
     await page.screenshot({ path: `verification/weapon-${id}.png` });
     await page.mouse.up({ button: 'right' });
     if (id !== 'melee') {
-      await page.mouse.down(); await page.waitForTimeout(160); await page.mouse.up();
+      const before = await page.evaluate(() => window.stickfight.adapter.fighters()[0].stats.shots);
+      await page.mouse.down();
+      await page.waitForFunction(before => window.stickfight.adapter.fighters()[0].stats.shots > before, before);
+      await page.mouse.up();
       await page.keyboard.press('KeyR'); await page.waitForTimeout(100);
     }
     check(`${id} rig runs`, errors.length === 0);

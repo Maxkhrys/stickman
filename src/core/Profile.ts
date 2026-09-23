@@ -33,6 +33,9 @@ export interface MatchReward {
 }
 export interface RewardReceipt { ink: number; xp: number; contracts: string[]; won: boolean }
 const count = (v: unknown, max = 1e9) => typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(max, Math.floor(v))) : 0;
+function browserStorage(): Storage | null {
+  try { return typeof localStorage === 'undefined' ? null : localStorage; } catch { return null; }
+}
 const day = () => new Date().toISOString().slice(0, 10);
 const fresh = (): ProfileData => ({ version: 1, ink: 600, xp: 0, owned: ['ar', 'sniper'], inks: ['yellow'], equippedInk: 'yellow', mastery: {}, matches: 0, wins: 0, paidMatches: [], daily: { date: day(), kills: 0, heads: 0, objective: 0, claimed: [] } });
 export const CONTRACTS = [
@@ -45,7 +48,8 @@ export const CONTRACTS = [
 export class Profile {
   data: ProfileData = fresh();
   storageAvailable = true;
-  constructor(private storage: Pick<Storage, 'getItem' | 'setItem'> | null = typeof localStorage === 'undefined' ? null : localStorage) {
+  constructor(private storage: Pick<Storage, 'getItem' | 'setItem'> | null = browserStorage()) {
+    this.storageAvailable = storage !== null;
     try {
       const raw = storage?.getItem(PROFILE_KEY);
       if (raw) {

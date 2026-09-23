@@ -32,7 +32,7 @@ Or import the repo in the Vercel dashboard. No settings needed.
 | Tab / Esc | scoreboard / pause |
 
 Modes: **Gun Range** (dummies, distance markers, movement playground, live speed/DPS/spread readout)
-and **Free-for-all vs 6 bots** (first to 25, 6 min). Bot difficulty: Easy / Normal / Hard / Insane.
+and **Free-for-all vs 6 bots** (first to 25, 6 min). Bot difficulty: Easy / Normal / Hard.
 Settings (sensitivity, ADS sensitivity, FOV (default 100), volume, camera bob, FOV kick, render scale,
 crosshair colour, keybinds) are saved to localStorage.
 

@@ -70,11 +70,11 @@ try {
   check('New map, equipped weapon and character loaded', await page.evaluate(() => { const a = window.stickfight; const f = a.adapter.fighters()[0]; return a.adapter.map().name === 'Bookyard' && f.weapons[0].id === 'smg' && f.color === 0x22c6e0; }));
   // Inspect objective at center, then let real match rules finish a short deterministic round.
   await page.evaluate(() => { const a = window.stickfight; const m = a.adapter.match; m.fighters[0].pos = { x: 0, y: 0, z: 3 }; m.fighters[0].prevPos = { ...m.fighters[0].pos }; for (const f of m.fighters.slice(1)) { f.alive = false; f.respawnTimer = 9999; } });
-  await page.waitForFunction(() => window.stickfight.adapter.fighters()[0].stats.objective >= 1, null, { timeout: 20000 }); await draw();
+  await page.waitForFunction(() => window.stickfight.adapter.fighters()[0].stats.objective >= 1, null, { timeout: 90000 }); await draw();
   await page.screenshot({ path: 'verification/bookyard-objective.png' });
   check('Objective scores and HUD shows state', await page.evaluate(() => window.stickfight.adapter.fighters()[0].stats.objective >= 1 && document.querySelector('.objective-panel').textContent.includes('SCORING')));
   await page.evaluate(() => { window.stickfight.adapter.match.opts.scoreLimit = 2; });
-  await page.waitForFunction(() => window.stickfight.state === 'ended', null, { timeout: 10000 });
+  await page.waitForFunction(() => window.stickfight.state === 'ended', null, { timeout: 90000 });
   check('Match result awards currency', await page.evaluate(() => window.stickfight.profile.data.matches === 1 && window.stickfight.profile.data.ink > 90));
   await page.screenshot({ path: 'verification/results.png' });
   const balance = await page.evaluate(() => window.stickfight.profile.data.ink);

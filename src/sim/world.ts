@@ -34,6 +34,18 @@ export class World {
     return h;
   }
 
+  /** Highest ramp surface anywhere under a square footprint (centre, edges, corners), or -Infinity. */
+  rampHeightMax(x: number, z: number, r: number): number {
+    let h = -Infinity;
+    for (const r0 of this.ramps) {
+      if (x + r < r0.x0 || x - r > r0.x1 || z + r < r0.z0 || z - r > r0.z1) continue;
+      // the wedge is linear, so its maximum over the clipped footprint is at a clipped corner
+      const cx0 = Math.max(x - r, r0.x0), cx1 = Math.min(x + r, r0.x1), cz0 = Math.max(z - r, r0.z0), cz1 = Math.min(z + r, r0.z1);
+      for (const px of [cx0, cx1]) for (const pz of [cz0, cz1]) h = Math.max(h, this.rampHeight(r0, px, pz));
+    }
+    return h;
+  }
+
   /** Highest walkable surface under a footprint of radius r whose top is <= maxY. */
   surfaceBelow(x: number, z: number, r: number, maxY: number): number {
     let best = 0;

@@ -139,7 +139,7 @@ interface CharState {
   rest: number[];
   headPop: boolean;
   blinkT: number;
-  wounds: { joint: JName; offset: THREE.Vector3; yaw: number; life: number; tick: number }[];
+  wounds: { bone: number; t: number; or: number; of: number; life: number; tick: number }[];
   forming: number;
   deathDir: THREE.Vector3;
   deathPulse: number;
@@ -155,6 +155,28 @@ const LINKS: [JName, JName][] = [
   ['lHip', 'lKnee'], ['lKnee', 'lAnkle'], ['lAnkle', 'lToe'], ['rHip', 'rKnee'], ['rKnee', 'rAnkle'], ['rAnkle', 'rToe'],
   ['lShoulder', 'pelvis'], ['rShoulder', 'pelvis'], ['head', 'chest'],
 ];
+
+/** Bones that can carry a wound: [from, to, surface radius]. */
+const BONES: [JName, JName, number][] = [
+  ['pelvis', 'chest', 0.2], ['neck', 'head', 0.2],
+  ['lShoulder', 'lElbow', 0.07], ['lElbow', 'lHand', 0.065], ['rShoulder', 'rElbow', 0.07], ['rElbow', 'rHand', 0.065],
+  ['lHip', 'lKnee', 0.09], ['lKnee', 'lAnkle', 0.08], ['rHip', 'rKnee', 0.09], ['rKnee', 'rAnkle', 0.08],
+];
+const _fr = { r: new THREE.Vector3(), f: new THREE.Vector3(), ax: new THREE.Vector3() };
+/** Orthonormal frame riding a bone: axis along the bone, right from the body frame projected off it. */
+function boneFrame(sk: Skeleton, i: number) {
+  const a = sk[BONES[i][0]] as Vec3, b = sk[BONES[i][1]] as Vec3;
+  const ax = _fr.ax.set(b.x - a.x, b.y - a.y, b.z - a.z);
+  if (ax.lengthSq() < 1e-8) ax.set(0, 1, 0);
+  ax.normalize();
+  const ref = i >= 6 ? sk.lowerRight : sk.upperRight;
+  const r = _fr.r.set(ref.x, ref.y, ref.z);
+  r.addScaledVector(ax, -r.dot(ax));
+  if (r.lengthSq() < 1e-6) r.set(ax.y, -ax.x, 0);
+  r.normalize();
+  _fr.f.crossVectors(ax, r);
+  return _fr;
+}
 
 const tv = new THREE.Vector3();
 const tv2 = new THREE.Vector3();
@@ -237,22 +259,43 @@ export class CharacterRenderer {
     this.chars.clear();
   }
 
-  /** Attach to the nearest moving joint in its yaw-local frame; max four active wounds. */
-  wound(id: number, pos: Vec3, yaw: number) {
+  /**
+   * Attach to the bone segment that was hit: parameter along the bone plus an offset in a frame that
+   * bends and twists with that bone, so wounds stay on the limb through elbows, knees, runs and slides.
+   */
+  wound(id: number, pos: Vec3, _yaw: number) {
     if (!SAND.enabled) return;
     const c = this.chars.get(id);
     if (!c || c.dead) return;
-    let joint: JName = 'chest';
-    let best = Infinity;
-    for (const name of J) {
-      const p = c.sk[name] as Vec3;
-      const d = (p.x - pos.x) ** 2 + (p.y - pos.y) ** 2 + (p.z - pos.z) ** 2;
-      if (d < best) { best = d; joint = name; }
+    let bone = 0, bestT = 0, best = Infinity;
+    for (let i = 0; i < BONES.length; i++) {
+      const a = c.sk[BONES[i][0]] as Vec3, b = c.sk[BONES[i][1]] as Vec3;
+      const abx = b.x - a.x, aby = b.y - a.y, abz = b.z - a.z;
+      const len2 = abx * abx + aby * aby + abz * abz || 1e-6;
+      const t = Math.max(0, Math.min(1, ((pos.x - a.x) * abx + (pos.y - a.y) * aby + (pos.z - a.z) * abz) / len2));
+      const d = (a.x + abx * t - pos.x) ** 2 + (a.y + aby * t - pos.y) ** 2 + (a.z + abz * t - pos.z) ** 2;
+      if (d < best) { best = d; bone = i; bestT = t; }
     }
-    const p = c.sk[joint] as Vec3;
-    const dx = pos.x - p.x, dz = pos.z - p.z;
+    const fr = boneFrame(c.sk, bone);
+    const a = c.sk[BONES[bone][0]] as Vec3, b = c.sk[BONES[bone][1]] as Vec3;
+    const ox = pos.x - (a.x + (b.x - a.x) * bestT), oy = pos.y - (a.y + (b.y - a.y) * bestT), oz = pos.z - (a.z + (b.z - a.z) * bestT);
+    let or = ox * fr.r.x + oy * fr.r.y + oz * fr.r.z, of = ox * fr.f.x + oy * fr.f.y + oz * fr.f.z;
+    // sit on the limb surface, never floating off it
+    const rad = Math.hypot(or, of), maxR = BONES[bone][2];
+    if (rad > maxR) { or *= maxR / rad; of *= maxR / rad; }
     if (c.wounds.length >= SAND.maxWounds) c.wounds.shift();
-    c.wounds.push({ joint, offset: new THREE.Vector3(dx * Math.cos(yaw) - dz * Math.sin(yaw), pos.y - p.y, dx * Math.sin(yaw) + dz * Math.cos(yaw)), yaw, life: SAND.woundLife, tick: 0 });
+    c.wounds.push({ bone, t: bestT, or, of, life: SAND.woundLife, tick: 0 });
+  }
+
+  /** Current world position of a wound on the posed skeleton. */
+  woundPos(c: CharState, w: CharState['wounds'][number], out: THREE.Vector3) {
+    const fr = boneFrame(c.sk, w.bone);
+    const a = c.sk[BONES[w.bone][0]] as Vec3, b = c.sk[BONES[w.bone][1]] as Vec3;
+    return out.set(
+      a.x + (b.x - a.x) * w.t + fr.r.x * w.or + fr.f.x * w.of,
+      a.y + (b.y - a.y) * w.t + fr.r.y * w.or + fr.f.y * w.of,
+      a.z + (b.z - a.z) * w.t + fr.r.z * w.or + fr.f.z * w.of,
+    );
   }
 
   private stateOf(f: Fighter): CharState {
@@ -365,12 +408,13 @@ export class CharacterRenderer {
           c.deathPulse = c.deadT;
           const source = c.rp[c.headPop ? JI.head : JI.chest];
           const point = source.clone().lerp(c.rp[JI.pelvis], c.deadT / SAND.collapseTime * 0.65);
-          this.effects.sandBurst(point, f.color, 12, 2.6, c.deathDir, SAND.pileLife);
+          if (c.deathPulse < 0.2) this.effects.sandPile(c.rp[JI.pelvis], f.color, c.deathDir);
+          this.effects.sandBurst(point, f.color, 14, 2.6, c.deathDir, SAND.pileLife, 1.7);
         }
         if (!c.burst && c.deadT > SAND.collapseTime) {
           c.burst = true;
           const center = c.rp[JI.chest].clone().lerp(c.rp[JI.pelvis], 0.5);
-          if (SAND.enabled) this.effects.sandBurst(center, f.color, 30, 2.4, c.deathDir, SAND.pileLife);
+          if (SAND.enabled) this.effects.sandBurst(center, f.color, 34, 2.4, c.deathDir, SAND.pileLife, 1.7);
           else {
             this.effects.burst(center, f.color, 26, 5.5, 0.09, 0.7, 1);
             this.effects.burst(center, c.outfit.body, 20, 4.5, 0.08, 0.7, 1);
@@ -395,9 +439,7 @@ export class CharacterRenderer {
           w.tick += dt;
           if (w.tick < SAND.trickleInterval || w.life <= 0) continue;
           w.tick = 0;
-          const joint = c.sk[w.joint] as Vec3;
-          const yaw = f.yaw;
-          const p = new THREE.Vector3(joint.x + w.offset.x * Math.cos(yaw) + w.offset.z * Math.sin(yaw), joint.y + w.offset.y, joint.z - w.offset.x * Math.sin(yaw) + w.offset.z * Math.cos(yaw));
+          const p = this.woundPos(c, w, new THREE.Vector3());
           this.effects.sandBurst(p, f.color, 2, 0.48, undefined, 1.2);
         }
         c.wounds = c.wounds.filter((w) => w.life > 0);

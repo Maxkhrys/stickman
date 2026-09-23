@@ -78,8 +78,9 @@ function moveAxis(f: Fighter, world: World, axis: 'x' | 'z', delta: number, grou
   f.pos[axis] += delta;
 
   // ramps: walk up the slope, but their tall sides are walls
+  // the whole footprint, not just the centre, so the body can't sink into a ramp's tall side
   const rh = world.rampHeightAt(f.pos.x, f.pos.z);
-  if (rh > f.pos.y + MOVE.stepHeight) {
+  if (world.rampHeightMax(f.pos.x, f.pos.z, r - 0.02) > f.pos.y + MOVE.stepHeight) {
     f.pos[axis] = old;
     f.vel[axis] = 0;
     return;

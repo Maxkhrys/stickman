@@ -8,6 +8,10 @@ import { eyePos, type Fighter } from '../src/sim/fighter';
 import { computeSpread } from '../src/sim/combat';
 import { weaponState } from '../src/sim/weaponsim';
 import { FixedLoop } from '../src/core/Loop';
+import { MAPS } from '../src/sim/map';
+import { World } from '../src/sim/world';
+import { createFighter } from '../src/sim/fighter';
+import { simulateMovement } from '../src/sim/movement';
 
 let failed = 0;
 function check(name: string, ok: boolean, detail: string) {
@@ -356,6 +360,31 @@ function aimAt(p: Fighter, c: InputCommand, x: number, y: number, z: number) {
   const em = med('easy', true), hm = med('hard', true);
   check('difficulty ladder vs standing player', es > ns && ns > hs && es > 3 * hs, `survive easy ${es.toFixed(1)}s / normal ${ns.toFixed(1)}s / hard ${hs.toFixed(1)}s`);
   check('easy bots forgive strafing', em >= 10 && hm < em, `strafing survive easy ${em.toFixed(1)}s / hard ${hm.toFixed(1)}s`);
+}
+
+// ---- collision sweep: random runs/jumps/strafes never sink the body into ramp sides or boxes ----
+{
+  let bad = 0, runs = 0;
+  for (const m of ['arena', 'bookyard'] as const) {
+    const w = new World(MAPS[m]);
+    const b = MAPS[m].bounds;
+    let seed = 11;
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    for (let k = 0; k < 250; k++) {
+      const x = b.minX + rnd() * (b.maxX - b.minX), z = b.minZ + rnd() * (b.maxZ - b.minZ), yaw = rnd() * 6.28;
+      if (!w.isClear(x, 0, z, 0.36, 1.8) || w.rampHeightMax(x, z, 0.36) > -Infinity) continue;
+      const f = createFighter(0, 'p', 0, 'player', ['ar', 'pistol', 'melee']);
+      f.pos = { x, y: 0, z }; f.prevPos = { ...f.pos }; f.onGround = true;
+      const btn = (rnd() < 0.3 ? BTN.JUMP : 0) | (rnd() < 0.2 ? BTN.CROUCH : 0), strafe = rnd() < 0.5 ? 0 : 1;
+      runs++;
+      for (let i = 0; i < 240; i++) {
+        const c = emptyCommand(); c.forward = 1; c.strafe = strafe; c.yaw = yaw + i * 0.004; c.buttons = btn;
+        simulateMovement(f, c, TICK_DT, w, [], i * TICK_DT);
+        if (w.rampHeightMax(f.pos.x, f.pos.z, 0.3) > f.pos.y + 0.56 || !w.isClear(f.pos.x, f.pos.y + 0.01, f.pos.z, 0.33, f.height - 0.02)) { bad++; break; }
+      }
+    }
+  }
+  check('no clipping into ramp sides or boxes', bad === 0, `${bad} of ${runs} random run/jump/crouch paths penetrated`);
 }
 
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');

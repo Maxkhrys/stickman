@@ -8,34 +8,52 @@ export const SAND = {
   trickleInterval: 0.075,
   impactGrains: 16,
   deathGrains: 80,
-  grainSize: 0.016,
+  grainSize: 0.018,
   collapseTime: 0.85,
   pileLife: 7,
 } as const;
 
 let sharedGrain: THREE.CanvasTexture | null = null;
-/** One fixed grain map shared across characters, hands and weapons. No animated noise. */
-function grainMap() {
+/**
+ * One fixed grain map shared across characters, hands, weapons and sand piles. No animated noise.
+ * Coarse two-pixel grains with sparse dark and bright pebbles, over faint wind-laid strata, so the
+ * body still reads as sand at combat range after mipmapping instead of averaging to flat colour.
+ */
+export function sandGrainMap() {
   if (sharedGrain) return sharedGrain;
+  const S = 128;
   const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = 128;
+  canvas.width = canvas.height = S;
   const ctx = canvas.getContext('2d')!;
-  const pixels = ctx.createImageData(128, 128);
+  const pixels = ctx.createImageData(S, S);
   let seed = 0x53414e44;
-  for (let i = 0; i < 128 * 128; i++) {
-    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
-    const shade = 177 + (seed >>> 24) * 0.3;
-    pixels.data.set([shade, shade, shade, 255], i * 4);
+  const rnd = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296);
+  const g = new Float32Array(S * S);
+  for (let y = 0; y < S; y += 2) for (let x = 0; x < S; x += 2) {
+    const v = (rnd() - 0.5) * 34;
+    g[y * S + x] = g[y * S + x + 1] = g[(y + 1) * S + x] = g[(y + 1) * S + x + 1] = v;
+  }
+  for (let k = 0; k < 260; k++) {
+    const x = Math.floor(rnd() * S), y = Math.floor(rnd() * S), v = rnd() < 0.6 ? -46 : 30;
+    for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) g[((y + dy) % S) * S + ((x + dx) % S)] += v;
+  }
+  for (let y = 0; y < S; y++) {
+    const strata = Math.sin((y / S) * Math.PI * 2 * 3 + Math.sin((y / S) * Math.PI * 4) * 0.8) * 9;
+    for (let x = 0; x < S; x++) {
+      const shade = Math.max(0, Math.min(255, 196 + strata + g[y * S + x]));
+      pixels.data.set([shade, shade * 0.985, shade * 0.95, 255], (y * S + x) * 4);
+    }
   }
   ctx.putImageData(pixels, 0, 0);
   sharedGrain = new THREE.CanvasTexture(canvas);
   sharedGrain.wrapS = sharedGrain.wrapT = THREE.RepeatWrapping;
-  sharedGrain.repeat.set(3, 3);
+  sharedGrain.repeat.set(2, 2);
   sharedGrain.minFilter = THREE.LinearMipmapLinearFilter;
   sharedGrain.magFilter = THREE.LinearFilter;
   sharedGrain.generateMipmaps = true;
   return sharedGrain;
 }
+const grainMap = sandGrainMap;
 
 export function sandMaterial<T extends THREE.MeshToonMaterial>(material: T): T {
   // Keep the expressive head's face map; other solids share one cached granular map.

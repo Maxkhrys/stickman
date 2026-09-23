@@ -109,6 +109,8 @@ export class Viewmodel {
   private magDropClones = new Map<WeaponId, THREE.Object3D>();
   private formation = new Map<WeaponId, THREE.InstancedMesh>();
   private formationDummy = new THREE.Object3D();
+  /** cosmetic formation after any switch (instant range switches included); never gates firing */
+  private formT = 0;
   private solidParts = new Map<WeaponId, { mesh: THREE.Mesh; scale: THREE.Vector3 }[]>();
   /** last computed muzzle position in viewmodel camera space */
   readonly muzzleVM = new THREE.Vector3();
@@ -136,7 +138,7 @@ export class Viewmodel {
         const parts: { mesh: THREE.Mesh; scale: THREE.Vector3 }[] = [];
         r.root.traverse((o) => { if (o instanceof THREE.Mesh && o.name !== 'outline' && !/lens|glass|reticle/i.test(o.name)) parts.push({ mesh: o, scale: o.scale.clone() }); });
         this.solidParts.set(r.id, parts);
-        const grains = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.0028, 0), new THREE.MeshBasicMaterial({ color: 0xb5a2a0 }), 56);
+        const grains = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.0038, 0), new THREE.MeshBasicMaterial({ color: 0xb5a2a0 }), 56);
         grains.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
         grains.frustumCulled = false;
         grains.count = 0;
@@ -227,6 +229,7 @@ export class Viewmodel {
     if (s.weapon !== this.cur) {
       this.rigs[this.cur].root.visible = false;
       this.cur = s.weapon;
+      this.formT = 1;
       this.droppedMag = null;
       for (const c of this.magDropClones.values()) c.visible = false;
     }
@@ -235,10 +238,13 @@ export class Viewmodel {
     rig.root.visible = visible;
     if (SAND.enabled) {
       // Existing draw timer is authoritative. Sights and sockets never move from their ADS alignment.
-      const compact = Math.max(0.12, 1 - Math.min(1, s.drawProgress) * (s.weapon === 'sniper' ? 0.88 : 0.72));
+      // aiming always wins: an instant switch straight into ADS skips the cosmetic formation
+      this.formT = s.ads > 0.3 ? 0 : Math.max(0, this.formT - dt / 0.22);
+      const formP = Math.max(Math.min(1, s.drawProgress), this.formT * this.formT);
+      const compact = Math.max(0.12, 1 - formP * (s.weapon === 'sniper' ? 0.88 : 0.72));
       for (const p of this.solidParts.get(this.cur) ?? []) p.mesh.scale.copy(p.scale).multiplyScalar(compact);
       const grains = this.formation.get(this.cur)!;
-      const activity = Math.max(s.drawProgress, s.reloadProgress >= 0 ? Math.sin(s.reloadProgress * Math.PI) * 0.85 : 0, s.boltProgress >= 0 ? Math.sin(s.boltProgress * Math.PI) * 0.45 : 0);
+      const activity = Math.max(formP, s.reloadProgress >= 0 ? Math.sin(s.reloadProgress * Math.PI) * 0.85 : 0, s.boltProgress >= 0 ? Math.sin(s.boltProgress * Math.PI) * 0.45 : 0);
       const count = visible && s.ads < 0.45 ? Math.min(56, Math.floor(activity * 56)) : 0;
       grains.count = count;
       for (let i = 0; i < count; i++) {

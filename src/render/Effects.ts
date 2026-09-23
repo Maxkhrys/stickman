@@ -1,12 +1,15 @@
 import * as THREE from 'three';
 import { makeFlashTexture, makeSplatTexture } from './textures';
-import { SAND } from './sand';
+import { SAND, sandGrainMap } from './sand';
 import type { World } from '../sim/world';
 
 const MAX_PARTICLES = 600;
 const MAX_TRACERS = 32;
 const MAX_HOLES = 96;
 const MAX_SPLATS = 64;
+const MAX_PILES = 12;
+
+interface Pile { alive: boolean; x: number; y: number; z: number; r: number; age: number; life: number; rot: number }
 
 interface Particle {
   alive: boolean;
@@ -50,6 +53,10 @@ export class Effects {
   private splats: THREE.InstancedMesh;
   private splatIdx = 0;
   private world: World | null = null;
+  private piles: Pile[] = [];
+  private pileMesh: THREE.InstancedMesh;
+  private pileIdx = 0;
+  private stealIdx = 0;
   setWorld(world: World) { this.world = world; }
 
   constructor() {
@@ -65,6 +72,19 @@ export class Effects {
       this.pMesh.setColorAt(i, this.color.set(0xffffff));
     }
     this.group.add(this.pMesh);
+
+    // settled sand mounds left by collapsed fighters (fixed pool, recycled oldest-first)
+    const mound = new THREE.SphereGeometry(1, 14, 6, 0, Math.PI * 2, 0, Math.PI / 2);
+    this.pileMesh = new THREE.InstancedMesh(mound, new THREE.MeshLambertMaterial({ map: sandGrainMap() }), MAX_PILES);
+    this.pileMesh.frustumCulled = false;
+    for (let i = 0; i < MAX_PILES; i++) {
+      this.piles.push({ alive: false, x: 0, y: 0, z: 0, r: 0.5, age: 0, life: 1, rot: 0 });
+      dummy.scale.setScalar(0);
+      dummy.updateMatrix();
+      this.pileMesh.setMatrixAt(i, dummy.matrix);
+      this.pileMesh.setColorAt(i, this.color.set(0xffffff));
+    }
+    this.group.add(this.pileMesh);
 
     const tg = new THREE.BoxGeometry(1, 1, 1);
     tg.translate(0, 0, 0.5);
@@ -114,6 +134,8 @@ export class Effects {
 
   clear() {
     for (const p of this.particles) p.alive = false;
+    for (const p of this.piles) p.alive = false;
+    this.writePiles();
     for (const f of this.flashes) f.s.visible = false;
     for (const t of this.tracers) {
       t.mesh.visible = false;
@@ -202,23 +224,63 @@ export class Effects {
     if (this.pMesh.instanceColor) this.pMesh.instanceColor.needsUpdate = true;
   }
 
+  /** A body's worth of sand gathering on the surface below, pushed along the death direction. */
+  sandPile(pos: THREE.Vector3, color: number, dir: THREE.Vector3, life = SAND.pileLife) {
+    if (!SAND.enabled) return;
+    const i = this.pileIdx;
+    this.pileIdx = (this.pileIdx + 1) % MAX_PILES;
+    const h = Math.hypot(dir.x, dir.z) || 1;
+    const x = pos.x + (dir.x / h) * 0.35, z = pos.z + (dir.z / h) * 0.35;
+    const y = this.world ? this.world.surfaceBelow(x, z, 0.25, pos.y + 0.2) : 0;
+    Object.assign(this.piles[i], { alive: true, x, y, z, r: 0.5 + Math.random() * 0.12, age: 0, life, rot: Math.random() * 6.28 });
+    this.pileMesh.setColorAt(i, this.color.set(color).offsetHSL(0, -0.05, -0.04));
+    if (this.pileMesh.instanceColor) this.pileMesh.instanceColor.needsUpdate = true;
+  }
+
+  private writePiles() {
+    for (let i = 0; i < MAX_PILES; i++) {
+      const p = this.piles[i];
+      if (!p.alive) dummy.scale.setScalar(0);
+      else {
+        // gather (0.6 s ease-out), hold, then sink into the floor over the last 1.5 s
+        const grow = 1 - (1 - Math.min(1, p.age / 0.6)) ** 3;
+        const sink = Math.min(1, Math.max(0, (p.life - p.age) / 1.5));
+        dummy.position.set(p.x, p.y + 0.004, p.z);
+        dummy.rotation.set(0, p.rot, 0);
+        dummy.scale.set(p.r * (0.55 + 0.45 * grow), 0.2 * grow * sink + 0.001, p.r * 0.8 * (0.55 + 0.45 * grow));
+      }
+      dummy.updateMatrix();
+      this.pileMesh.setMatrixAt(i, dummy.matrix);
+    }
+    this.pileMesh.instanceMatrix.needsUpdate = true;
+  }
+
   /** Small pooled grains with real collision-surface settling. Never affects hit detection. */
-  sandBurst(pos: THREE.Vector3, color: number, count: number, speed: number, dir?: THREE.Vector3, life = 1.4) {
+  sandBurst(pos: THREE.Vector3, color: number, count: number, speed: number, dir?: THREE.Vector3, life = 1.4, sizeMul = 1) {
     if (!SAND.enabled) return;
     let spawned = 0;
-    for (const [i, p] of this.particles.entries()) {
-      if (p.alive) continue;
+    let freeLeft = true;
+    for (let n = 0; n < MAX_PARTICLES && spawned < count; n++) {
+      // free slots first; once the pool is full, fresh grains recycle the oldest ones (round robin)
+      let i = n;
+      if (freeLeft && this.particles[i].alive) {
+        if (n < MAX_PARTICLES - 1) continue;
+        freeLeft = false;
+      }
+      if (!freeLeft) { i = this.stealIdx; this.stealIdx = (this.stealIdx + 1) % MAX_PARTICLES; }
+      const p = this.particles[i];
       p.alive = p.sand = true;
       p.p.copy(pos);
       p.v.set(Math.random() - 0.5, Math.random() * 0.8 - 0.15, Math.random() - 0.5).normalize().multiplyScalar(speed * (0.28 + Math.random() * 0.72));
       if (dir) p.v.addScaledVector(dir, speed * 0.72);
       p.v.y += speed * 0.22;
       p.max = p.life = life * (0.75 + Math.random() * 0.45);
-      p.size = SAND.grainSize * (0.55 + Math.random() * 0.8);
+      p.size = SAND.grainSize * sizeMul * (0.55 + Math.random() * 0.8);
       p.grav = 1;
       p.floor = 0;
       this.pMesh.setColorAt(i, this.color.set(color).offsetHSL(0, 0, (Math.random() - 0.5) * 0.18));
-      if (++spawned >= count) break;
+      spawned++;
+      if (!freeLeft) n--; // keep stealing until the burst is complete
     }
     if (this.pMesh.instanceColor) this.pMesh.instanceColor.needsUpdate = true;
   }
@@ -237,6 +299,9 @@ export class Effects {
   readonly camPos = new THREE.Vector3();
 
   update(dt: number) {
+    let anyPile = false;
+    for (const p of this.piles) if (p.alive) { p.age += dt; if (p.age >= p.life) p.alive = false; anyPile = true; }
+    if (anyPile) this.writePiles();
     for (let i = 0; i < MAX_PARTICLES; i++) {
       const p = this.particles[i];
       if (!p.alive) continue;

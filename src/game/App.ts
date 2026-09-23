@@ -264,6 +264,8 @@ export class App {
           if (SAND.enabled) {
             R.effects.sandBurst(tv, ink, SAND.impactGrains + (head ? 7 : 0), 3.8, tv2);
             if (victim && !e.killed) R.characters.wound(e.victim, e.pos, victim.yaw);
+            const [sd, span] = this.spatial(e.pos);
+            this.sfx.sandImpact(sd, span);
           } else {
             R.effects.burst(tv, head ? 0xffd23f : ink, head ? 8 : 5, 3.5, 0.05, 0.4, 1, tv2);
             R.effects.burst(tv, 0x1b1b24, 3, 2.5, 0.04, 0.4, 1, tv2);
@@ -313,6 +315,10 @@ export class App {
         const floorY = this.adapter.world().surfaceBelow(victim.pos.x, victim.pos.z, 0.3, victim.pos.y + 0.1);
         if (!SAND.enabled) R.effects.inkSplat(victim.pos.x + e.dir.x * 0.6, floorY, victim.pos.z + e.dir.z * 0.6, victim.color, e.headshot ? 2.6 : 1.8);
         R.characters.kill(victim, e.dir, e.headshot);
+        if (SAND.enabled) {
+          const [sd, span] = this.spatial(victim.pos);
+          this.sfx.sandCollapse(sd, span);
+        }
         if (e.headshot) {
           const h = R.characters.headOf(victim.id);
           if (h) {
@@ -356,7 +362,10 @@ export class App {
         if (e.id === local) this.sfx.bolt(WEAPONS.sniper.bolt!.time);
         break;
       case 'switch':
-        if (e.id === local) this.sfx.switchWeapon();
+        if (e.id === local) {
+          this.sfx.switchWeapon();
+          if (SAND.enabled) this.sfx.sandForm();
+        }
         break;
       case 'dryfire': {
         const f = this.fighter(e.id);

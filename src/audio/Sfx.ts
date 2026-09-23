@@ -223,6 +223,36 @@ export class Sfx {
     this.click(o, this.t + 0.06, 2600, 0.35);
   }
 
+  // ---------------- living sand (quiet material layer, never masks shots or hit ticks) ----------------
+  private lastSand = 0;
+  /** grains torn from a body: dry crunch starting just after the hit tick, then a short falling trickle */
+  sandImpact(dist = 0, pan = 0) {
+    if (!this.ok() || this.t - this.lastSand < 0.03) return;
+    this.lastSand = this.t;
+    const att = 1 / (1 + dist / 14);
+    const o = this.out('feedback', 0.22 * att, pan, 5200 - Math.min(dist, 40) * 80);
+    const t = this.t + 0.018;
+    this.noiseBurst(o, t, 0.06, 'bandpass', 2400, 900, 1.2, 0.5);
+    this.noiseBurst(o, t + 0.05, 0.28, 'bandpass', 3600, 2200, 0.9, 0.12, 0.04);
+  }
+
+  /** body collapsing into loose sand: soft low slump plus a settling hiss */
+  sandCollapse(dist = 0, pan = 0) {
+    if (!this.ok()) return;
+    const att = 1 / (1 + dist / 16);
+    const o = this.out('feedback', 0.3 * att, pan, 3800 - Math.min(dist, 40) * 50);
+    const t = this.t + 0.05;
+    this.noiseBurst(o, t, 0.35, 'lowpass', 900, 260, 0.7, 0.45, 0.02);
+    this.noiseBurst(o, t + 0.1, 0.75, 'bandpass', 3000, 1600, 0.8, 0.14, 0.12);
+  }
+
+  /** weapon forming from the forearms: brief rising sift under the mechanical switch click */
+  sandForm() {
+    if (!this.ok()) return;
+    const o = this.out('weapons', 0.16);
+    this.noiseBurst(o, this.t, 0.2, 'bandpass', 1400, 4200, 1.1, 0.35, 0.08);
+  }
+
   // ---------------- feedback (distinct per result) ----------------
   /** body hit: short dry tick */
   hitBody() {

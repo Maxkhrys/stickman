@@ -90,6 +90,12 @@ export class GameRenderer {
   private shake = 0;
   private roll = 0;
   private fovKick = 0;
+  /** camera-only smoothing of instant step-ups (stairs, ramp lips); the fighter's position is untouched */
+  private stepOff = 0;
+  private lastPy = NaN;
+  private lastPx = 0;
+  private lastPz = 0;
+  private lastStepId = -1;
   lastMeleeSide = 1;
   /** camera shake / bob / roll scale (settings) */
   motionScale = 1;
@@ -242,7 +248,16 @@ export class GameRenderer {
       const bobY = (Math.abs(Math.sin(this.bobPhase)) * 0.04 - 0.02) * this.bobAmt * calm;
       const bobX = Math.cos(this.bobPhase) * 0.018 * this.bobAmt * calm;
 
-      let camY = py + this.eyeH + bobY + this.dip.x * 0.35 * ms;
+      const stepDy = py - this.lastPy;
+      if (this.lastStepId !== me.id || !me.alive || !(Math.abs(stepDy) < 1.5)) this.stepOff = 0;
+      // a rise steeper than any ramp (slopes are <= ~0.65) is a step: ease the eye up over ~0.15 s
+      else if (me.onGround && stepDy > 0.05 && stepDy > Math.hypot(px - this.lastPx, pz - this.lastPz) * 0.9) this.stepOff = Math.max(-0.6, this.stepOff - stepDy);
+      this.stepOff *= Math.exp(-16 * dt);
+      this.lastPy = py;
+      this.lastPx = px;
+      this.lastPz = pz;
+      this.lastStepId = me.id;
+      let camY = py + this.eyeH + this.stepOff + bobY + this.dip.x * 0.35 * ms;
       if (!me.alive) camY = py + 0.5 + Math.min(1.5, (fi.time - me.deathTime) * 1.2);
       const sy = Math.sin(fi.viewYaw), cy = Math.cos(fi.viewYaw);
       const lvx = me.vel.x * cy - me.vel.z * sy;

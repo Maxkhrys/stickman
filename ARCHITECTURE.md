@@ -2,7 +2,7 @@
 
 ```
  raw input ──► Input (core/Input.ts) ──► InputCommand ──► NetworkAdapter ──► Match (sim/, authoritative)
-                                                                               │  60 Hz fixed tick
+                                                                               │  120 Hz fixed tick
  bots: BotBrain.think() ─────────────────► InputCommand ───────────────────────┘
                                                                                │
                                      GameEvent[] + Fighter state ◄─────────────┘
@@ -18,7 +18,7 @@
 2. **Everything acts through `InputCommand`.** Move, jump, crouch/slide, fire, ADS, reload and
    `switchWeapon` (slot/scroll) are fields of one command consumed per tick. Bots produce the same
    commands, so they obey the same movement and weapon rules as players.
-3. **Fixed 60 Hz simulation, interpolated rendering.** `core/Loop.ts` accumulates real time, steps
+3. **Fixed 120 Hz simulation, interpolated rendering.** `core/Loop.ts` accumulates real time, steps
    `Match.step(1/60)`, then renders with `alpha`. Fighters keep `prevPos/prevYaw/prevHeight/prevRecoil`
    for interpolation. The local camera uses the *latest* mouse angles (not interpolated) for zero added latency.
 4. **Output is events + state.** Shots, hits, kills, landings, reloads… are `GameEvent`s. Renderer, audio and HUD
@@ -27,7 +27,7 @@
 
 ## Multiplayer plan (authoritative WebSocket server)
 
-**Server**: Node process running `Match` unchanged at 60 Hz. Clients send `InputCommand`s (with `seq`)
+**Server**: Node process running `Match` unchanged at 120 Hz (or 60 Hz with the same code). Clients send `InputCommand`s (with `seq`)
 over WebSocket (binary, ~20 bytes each). Server applies each client's commands in order, broadcasts
 snapshots at 20–30 Hz (quantised positions/angles, delta-compressed against the last acked snapshot) plus
 reliable events (kills, hits confirmed).
@@ -59,7 +59,8 @@ bounds speeds), and never trust client hit claims.
 | `src/sim/` | match, movement physics, collision world, hitboxes, combat, weapon state machine, nav graph + A*, bot AI |
 | `src/net/` | `NetworkAdapter` interface, `LocalAdapter` |
 | `src/core/` | fixed loop, raw input → commands, settings (localStorage) |
-| `src/render/` | map baking, procedural stickmen + ragdolls, viewmodels, effects, camera rig |
+| `src/sim/body.ts` | deterministic skeleton shared by hitboxes (capsules + OBBs) and character rendering, so what you see is what you hit |
+| `src/render/` | map baking (fat ink lines, contact shadows), instanced toon characters + ragdolls, `vm/` viewmodel kit (weapons, gloves, sockets), render-to-texture sniper lens, effects, camera rig |
 | `src/audio/` | procedural WebAudio SFX |
 | `src/ui/` | HUD + menus (DOM) |
 | `src/game/App.ts` | wires everything together, maps events to feedback |

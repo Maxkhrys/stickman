@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { MapDef } from '../sim/map';
 import {
   makeCloudTexture,
@@ -128,11 +131,17 @@ export function buildMapMesh(map: MapDef): THREE.Group {
     mesh.matrixAutoUpdate = false;
     group.add(mesh);
   });
-  const lg = new THREE.BufferGeometry();
-  lg.setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
-  const outline = new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: 0x1b1b24, transparent: true, opacity: 0.85 }));
+  // bold ink outlines: screen-space fat lines (constant pixel width)
+  const lg = new LineSegmentsGeometry();
+  lg.setPositions(lines);
+  const lineMat = new LineMaterial({ color: 0x1b1b24, linewidth: 2, transparent: true, opacity: 0.9, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+  lineMat.resolution.set(window.innerWidth, window.innerHeight);
+  const outline = new LineSegments2(lg, lineMat);
+  outline.name = 'inkLines';
   outline.matrixAutoUpdate = false;
   group.add(outline);
+
+  group.add(buildContactShadows(map));
 
   // ---- pencils ----
   for (const p of map.props) group.add(buildPencil(p.x, p.z, p.h, p.r, p.color));
@@ -213,4 +222,63 @@ function buildPencil(x: number, z: number, h: number, r: number, color: number):
   g.add(lead);
   g.position.set(x, 0, z);
   return g;
+}
+
+/**
+ * Contact shadows: floor-standing solids are rasterised into an occupancy grid, and a soft ink wash
+ * falls off with distance from them. One texture, one quad, no double-darkening where boxes touch.
+ */
+function buildContactShadows(map: MapDef): THREE.Mesh {
+  const bd = map.bounds, cell = 0.2, R = 0.9;
+  const W = Math.ceil((bd.maxX - bd.minX) / cell), H = Math.ceil((bd.maxZ - bd.minZ) / cell);
+  const occ = new Float32Array(W * H); // occluder strength 0..1 (by height)
+  const fill = (x0: number, z0: number, x1: number, z1: number, h: number) => {
+    const s = Math.min(1, h / 0.8);
+    const i0 = Math.max(0, Math.floor((x0 - bd.minX) / cell)), i1 = Math.min(W - 1, Math.ceil((x1 - bd.minX) / cell) - 1);
+    const j0 = Math.max(0, Math.floor((z0 - bd.minZ) / cell)), j1 = Math.min(H - 1, Math.ceil((z1 - bd.minZ) / cell) - 1);
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) occ[j * W + i] = Math.max(occ[j * W + i], s);
+  };
+  for (const b of map.boxes) if (b.min.y < 0.01) fill(b.min.x, b.min.z, b.max.x, b.max.z, b.max.y);
+  for (const r of map.ramps) {
+    const n = 6;
+    for (let k = 0; k < n; k++) {
+      const t0 = k / n, t1 = (k + 1) / n, h = r.h0 + (r.h1 - r.h0) * (t0 + t1) / 2;
+      if (r.axis === 'x') fill(r.x0 + (r.x1 - r.x0) * t0, r.z0, r.x0 + (r.x1 - r.x0) * t1, r.z1, h);
+      else fill(r.x0, r.z0 + (r.z1 - r.z0) * t0, r.x1, r.z0 + (r.z1 - r.z0) * t1, h);
+    }
+  }
+  const data = new Uint8Array(W * H * 4);
+  const rc = Math.ceil(R / cell);
+  for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
+    let best = 0;
+    if (occ[j * W + i] > 0) best = occ[j * W + i];
+    else for (let dj = -rc; dj <= rc; dj++) {
+      const jj = j + dj; if (jj < 0 || jj >= H) continue;
+      for (let di = -rc; di <= rc; di++) {
+        const ii = i + di; if (ii < 0 || ii >= W) continue;
+        const o = occ[jj * W + ii]; if (!o) continue;
+        const d = Math.hypot(di, dj) * cell;
+        if (d >= R) continue;
+        const f = 1 - d / R;
+        best = Math.max(best, o * f * f);
+      }
+    }
+    const k = (j * W + i) * 4;
+    data[k] = data[k + 1] = data[k + 2] = 255;
+    data[k + 3] = Math.round(best * 0.3 * 255);
+  }
+  const tex = new THREE.DataTexture(data, W, H, THREE.RGBAFormat);
+  tex.magFilter = tex.minFilter = THREE.LinearFilter;
+  tex.needsUpdate = true;
+  const geo = new THREE.PlaneGeometry(W * cell, H * cell);
+  geo.rotateX(-Math.PI / 2);
+  // PlaneGeometry v=1 is at -z after rotation; texture row 0 is minZ
+  const uv = geo.getAttribute('uv') as THREE.BufferAttribute;
+  for (let i = 0; i < uv.count; i++) uv.setY(i, 1 - uv.getY(i));
+  const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex, color: 0x2a2440, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
+  mesh.position.set(bd.minX + (W * cell) / 2, 0.006, bd.minZ + (H * cell) / 2);
+  mesh.updateMatrix();
+  mesh.matrixAutoUpdate = false;
+  mesh.renderOrder = -1;
+  return mesh;
 }

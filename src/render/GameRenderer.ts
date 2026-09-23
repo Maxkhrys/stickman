@@ -118,6 +118,11 @@ export class GameRenderer {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.viewmodel.setAspect(w / h);
+    const ink = this.mapGroup?.getObjectByName('inkLines') as (THREE.Mesh & { material: { resolution: THREE.Vector2; linewidth: number } }) | undefined;
+    if (ink) {
+      ink.material.resolution.set(w, h);
+      ink.material.linewidth = Math.max(1.5, Math.min(3.5, 2.4 * h / 900));
+    }
   }
 
   setPixelRatio(r: number) {
@@ -142,6 +147,7 @@ export class GameRenderer {
     this.world = world;
     this.mapGroup = buildMapMesh(map);
     this.scene.add(this.mapGroup);
+    this.resize();
     this.rings = this.mapGroup.children.filter((o) => o.name === 'ring');
     this.scene.background = new THREE.Color(map.skyColor);
     this.scene.fog = new THREE.Fog(map.fogColor, 70, 200);

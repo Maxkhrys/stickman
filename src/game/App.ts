@@ -95,6 +95,7 @@ export class App {
       this.applySettings();
     };
     window.addEventListener('resize', () => this.renderer.resize());
+    window.addEventListener('keydown', (e) => { if (e.code === 'F1' && this.state === 'playing') { e.preventDefault(); this.hud.reopenNote(); } });
     this.canvas.addEventListener('click', () => {
       if (this.state === 'playing' && !this.input.locked) void this.input.lock();
     });
@@ -163,7 +164,7 @@ export class App {
     this.rangeDps = [];
     this.applySettings();
     if (s.mode === 'range') {
-      this.hud.setNote('✎ <b>Practice range</b>: <kbd>1-4</kbd> / wheel swap all 6 weapons · <kbd>H</kbd> show hit regions · <kbd>RMB</kbd> aim / scope. Movement course on the right.', 8);
+      this.hud.setNote('✎ <b>Practice range</b>: <kbd>1-4</kbd> / wheel swap all 6 weapons · <kbd>H</kbd> show hit regions · <kbd>RMB</kbd> aim / scope. Movement course on the right. <kbd>F1</kbd> help.', 8);
     } else if (s.mode === 'sketch') {
       this.hud.setNote('Hold the marked zone alone to score. First to 60. Zone moves every 40 seconds. V camera · Q shoulder.', 8);
     } else {

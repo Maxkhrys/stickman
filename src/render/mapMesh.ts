@@ -47,6 +47,8 @@ const _hsl = { h: 0, s: 0, l: 0 };
 function notebookColor(c: THREE.Color): THREE.Color {
   c.getHSL(_hsl);
   if (_hsl.s < 0.25) return c;
+  // cyan is a rare accent: large cyan solids become paper (hatched in pencil) so colour mass stays low
+  if (_hsl.h > 0.45 && _hsl.h < 0.6) return c.setHex(0xf3efe6);
   if (_hsl.h > 0.68 && _hsl.h < 0.86) c.setHSL(0.93, Math.min(1, _hsl.s + 0.1), Math.min(0.68, _hsl.l + 0.06));
   else if (_hsl.h > 0.22 && _hsl.h < 0.45) c.setHSL(0.13, Math.min(1, _hsl.s + 0.1), Math.max(0.55, _hsl.l));
   return c;
@@ -81,7 +83,18 @@ export function buildMapMesh(map: MapDef): THREE.Group {
     g.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
   };
 
-  const edge = (a: number[], b: number[]) => lines.push(a[0], a[1], a[2], b[0], b[1], b[2]);
+  // hand-inked edge: slight overshoot past the corners and a fixed mid-stroke wobble (seeded by
+  // position, so it is identical every frame and every load)
+  const ehash = (x: number, y: number, z: number) => { const v = Math.sin(x * 12.9898 + y * 78.233 + z * 37.719) * 43758.5453; return v - Math.floor(v) - 0.5; };
+  const edge = (a: number[], b: number[]) => {
+    const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    const L = Math.hypot(d[0], d[1], d[2]) || 1;
+    const o = Math.min(0.12, L * 0.04) / L;
+    const p0 = [a[0] - d[0] * o, a[1] - d[1] * o, a[2] - d[2] * o], p2 = [b[0] + d[0] * o, b[1] + d[1] * o, b[2] + d[2] * o];
+    const w = Math.min(0.06, L * 0.012);
+    const m = [(a[0] + b[0]) / 2 + ehash(a[0], b[1], a[2]) * w, (a[1] + b[1]) / 2 + ehash(b[0], a[1], b[2]) * w, (a[2] + b[2]) / 2 + ehash(a[2], a[0], b[1]) * w];
+    lines.push(p0[0], p0[1], p0[2], m[0], m[1], m[2], m[0], m[1], m[2], p2[0], p2[1], p2[2]);
+  };
 
   const box = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, color: number) => {
     const side: Bucket = y1 - y0 >= 5 && color === 0xf3efe6 ? 2 : 1;
@@ -95,6 +108,13 @@ export function buildMapMesh(map: MapDef): THREE.Group {
     const P = (x: number, y: number, z: number) => [x, y, z];
     const corners = [P(x0, y0, z0), P(x1, y0, z0), P(x1, y0, z1), P(x0, y0, z1), P(x0, y1, z0), P(x1, y1, z0), P(x1, y1, z1), P(x0, y1, z1)];
     for (const [a, b] of [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4], [0, 4], [1, 5], [2, 6], [3, 7]]) edge(corners[a], corners[b]);
+    // crates: drawn cross-bracing on each side (pink marker crates only, keeps walls and floors quiet)
+    notebookColor(c.set(color)).getHSL(_hsl, THREE.SRGBColorSpace);
+    const crate = _hsl.s > 0.3 && (_hsl.h > 0.88 || _hsl.h < 0.02) && y1 - y0 <= 3.2 && Math.max(x1 - x0, z1 - z0) <= 4.5;
+    if (crate) for (const [a, b, cc, dd] of [[0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]]) {
+      edge(corners[a], corners[cc]);
+      edge(corners[b], corners[dd]);
+    }
   };
 
   // pencils are rendered as props, so skip their collision boxes
@@ -155,7 +175,7 @@ export function buildMapMesh(map: MapDef): THREE.Group {
   // bold ink outlines: screen-space fat lines (constant pixel width)
   const lg = new LineSegmentsGeometry();
   lg.setPositions(lines);
-  const lineMat = new LineMaterial({ color: 0x1b1b24, linewidth: 2, transparent: true, opacity: 0.9, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+  const lineMat = new LineMaterial({ color: 0x1b1b24, linewidth: 2.6, transparent: true, opacity: 0.92, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
   lineMat.resolution.set(window.innerWidth, window.innerHeight);
   const outline = new LineSegments2(lg, lineMat);
   outline.name = 'inkLines';
@@ -168,8 +188,8 @@ export function buildMapMesh(map: MapDef): THREE.Group {
   for (const p of map.props) group.add(buildPencil(p.x, p.z, p.h, p.r, notebookColor(c.set(p.color)).getHex()));
 
   // ---- ink splats on the floor (instanced, one draw call) ----
-  const splatColors = [0xff4f9a, 0xff4f9a, 0xffd23f, 0xffd23f, 0x22c6e0, 0x1b1b24];
-  const nSplat = 70;
+  const splatColors = [0xff4f9a, 0xff4f9a, 0xff4f9a, 0xffd23f, 0xffd23f];
+  const nSplat = 90;
   const splats = new THREE.InstancedMesh(
     new THREE.PlaneGeometry(1, 1),
     new THREE.MeshBasicMaterial({ map: makeSplatTexture(), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 }),
@@ -181,7 +201,8 @@ export function buildMapMesh(map: MapDef): THREE.Group {
   for (let i = 0; i < nSplat; i++) {
     o.position.set(bd.minX + rnd() * (bd.maxX - bd.minX), 0.012, bd.minZ + rnd() * (bd.maxZ - bd.minZ));
     o.rotation.set(-Math.PI / 2, 0, rnd() * 6.28);
-    o.scale.setScalar(0.8 + rnd() * 2.2);
+    // a few big confident splats, the rest small satellite droplets
+    o.scale.setScalar(i % 3 === 0 ? 2.4 + rnd() * 2.6 : 0.35 + rnd() * 0.7);
     o.updateMatrix();
     splats.setMatrixAt(i, o.matrix);
     splats.setColorAt(i, c.set(splatColors[Math.floor(rnd() * splatColors.length)]));
@@ -201,7 +222,7 @@ export function buildMapMesh(map: MapDef): THREE.Group {
   }
   const ringMat = new THREE.MeshBasicMaterial({ color: 0xff4f9a });
   const ringGeo = new THREE.TorusGeometry(0.6, 0.12, 6, 18);
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 0; i++) { // floating rings retired: not part of the drawn target
     const r = new THREE.Mesh(ringGeo, ringMat);
     r.position.set(bd.minX + rnd() * (bd.maxX - bd.minX), 7 + rnd() * 5, bd.minZ + rnd() * (bd.maxZ - bd.minZ));
     r.rotation.set(rnd() * 0.6, rnd() * 6, 0);

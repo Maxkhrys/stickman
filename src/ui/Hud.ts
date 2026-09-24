@@ -22,6 +22,9 @@ export type HitKind = 'body' | 'head' | 'kill' | 'blocked';
  *   corners: health (BL), weapon/ammo (BR), kill feed (TR, max 4), match timer (TC)
  *   ring around centre: damage direction arcs; screen edge: low-health tint
  */
+/** dev/preview-only build identifier, so an old deployment is never reviewed by mistake */
+const BUILD_TAG = typeof __BUILD_TAG__ !== 'undefined' && __BUILD_TAG__ ? ` · ${__BUILD_TAG__}` : '';
+
 export class Hud {
   readonly root = el('div', '');
   private xh = el('div', 'xh', '<i class="t"></i><i class="b"></i><i class="l"></i><i class="r"></i><i class="dot"></i>');
@@ -191,6 +194,14 @@ export class Hud {
     }
   }
 
+  /** re-show the last help note (F1) */
+  reopenNote(seconds = 8) {
+    if (!this.note.innerHTML) return;
+    this.note.classList.remove('hidden');
+    this.note.style.opacity = '1';
+    this.noteTimer = seconds;
+  }
+
   setNote(text: string, seconds = 6) {
     this.note.innerHTML = text;
     this.note.classList.remove('hidden');
@@ -278,9 +289,11 @@ export class Hud {
 
   update(dt: number, me: Fighter | undefined, fighters: readonly Fighter[], info: MatchInfo, fps: number, showFps: boolean) {
     this.stepAnims(dt);
-    this.fpsEl.textContent = showFps ? `${fps} fps` : '';
+    this.fpsEl.textContent = (showFps ? `${fps} fps` : '') + BUILD_TAG;
     this.flashT = Math.max(0, this.flashT - dt);
     if (this.noteTimer > 0) {
+      // the help note collapses as soon as the player starts moving; F1 brings it back
+      if (me && Math.hypot(me.vel.x, me.vel.z) > 1.5 && this.noteTimer > 0.4) this.noteTimer = 0.4;
       this.noteTimer -= dt;
       if (this.noteTimer <= 0) this.note.style.opacity = '0';
     }

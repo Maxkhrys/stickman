@@ -35,6 +35,8 @@ interface Tracer {
   dir: THREE.Vector3;
   total: number;
   head: number;
+  start: number;
+  fresh: boolean;
   speed: number;
   len: number;
   thick: number;
@@ -53,7 +55,7 @@ export class Effects {
   private tracerIdx = 0;
   private holes: THREE.InstancedMesh;
   private holeIdx = 0;
-  private flashes: { s: THREE.Sprite; life: number }[] = [];
+  private flashes: { s: THREE.Sprite; life: number; fresh: boolean; follow?: (out: THREE.Vector3) => boolean }[] = [];
   private flashIdx = 0;
   private color = new THREE.Color();
   private splats: THREE.InstancedMesh;
@@ -112,7 +114,7 @@ export class Effects {
       const m = new THREE.Mesh(tg, new THREE.MeshBasicMaterial({ color: 0xffe9a0, transparent: true, depthWrite: false, side: THREE.DoubleSide, alphaMap: dash.clone() }));
       m.visible = false;
       m.frustumCulled = false;
-      this.tracers.push({ mesh: m, from: new THREE.Vector3(), dir: new THREE.Vector3(), total: 0, head: 0, speed: 300, len: 3, thick: 0.02, active: false });
+      this.tracers.push({ mesh: m, from: new THREE.Vector3(), dir: new THREE.Vector3(), total: 0, head: 0, start: 0, fresh: false, speed: 300, len: 3, thick: 0.02, active: false });
       this.group.add(m);
     }
 
@@ -147,7 +149,7 @@ export class Effects {
     for (let i = 0; i < 10; i++) {
       const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: ft, depthWrite: false, transparent: true }));
       s.visible = false;
-      this.flashes.push({ s, life: 0 });
+      this.flashes.push({ s, life: 0, fresh: false });
       this.group.add(s);
     }
   }
@@ -184,7 +186,7 @@ export class Effects {
     for (const p of this.particles) p.alive = false;
     for (const p of this.piles) p.alive = false;
     this.writePiles();
-    for (const f of this.flashes) f.s.visible = false;
+    for (const f of this.flashes) { f.s.visible = false; f.life = 0; f.follow = undefined; f.fresh = false; }
     for (const t of this.tracers) {
       t.mesh.visible = false;
       t.active = false;
@@ -204,12 +206,16 @@ export class Effects {
   tracer(from: THREE.Vector3, to: THREE.Vector3, thick = 0.018, color = 0xffe9a0, skip = 0, speed = 320, len = 3.2) {
     const t = this.tracers[this.tracerIdx];
     this.tracerIdx = (this.tracerIdx + 1) % MAX_TRACERS;
+    t.active = false;
+    t.mesh.visible = false;
     t.from.copy(from);
     t.dir.subVectors(to, from);
     t.total = t.dir.length();
     if (t.total < 0.05) return;
     t.dir.divideScalar(t.total);
-    t.head = Math.min(skip, t.total);
+    t.start = Math.max(0, Math.min(skip, t.total * 0.25));
+    t.head = t.start;
+    t.fresh = true;
     t.speed = speed;
     t.len = len;
     t.thick = thick;
@@ -224,14 +230,17 @@ export class Effects {
     t.mesh.visible = false;
   }
 
-  worldFlash(pos: THREE.Vector3, scale = 0.5) {
+  worldFlash(pos: THREE.Vector3, scale = 0.18, follow?: (out: THREE.Vector3) => boolean) {
     const f = this.flashes[this.flashIdx];
     this.flashIdx = (this.flashIdx + 1) % this.flashes.length;
     f.s.position.copy(pos);
     f.s.scale.set(scale, scale, 1);
     f.s.material.rotation = Math.random() * Math.PI;
     f.s.visible = true;
-    f.life = 0.05;
+    f.life = 0.04;
+    f.fresh = true;
+    f.follow = follow;
+    f.s.material.opacity = 1;
   }
 
   inkSplat(x: number, y: number, z: number, color: number, size: number) {
@@ -350,7 +359,10 @@ export class Effects {
   /** camera position for distance-scaled tracer width (set by the renderer each frame) */
   readonly camPos = new THREE.Vector3();
 
-  update(dt: number) {
+  /** World units per screen pixel at one metre; updated for the current FOV. */
+  pixelWorldScale = 0.0012;
+
+  update(dt: number, shotDt = dt) {
     this.writeSmears(dt);
     let anyPile = false;
     for (const p of this.piles) if (p.alive) { p.age += dt; if (p.age >= p.life) p.alive = false; anyPile = true; }
@@ -384,8 +396,11 @@ export class Effects {
 
     for (const t of this.tracers) {
       if (!t.active) continue;
-      t.head += t.speed * dt;
-      const tail = Math.max(0, t.head - t.len);
+      t.head += t.speed * shotDt;
+      // Short shots used to skip their entire path between two frames. Present the
+      // first segment at least once, then let the tail finish on the next frame.
+      if (t.fresh) { t.head = Math.min(t.head, t.total); t.fresh = false; }
+      const tail = Math.max(t.start, t.head - t.len);
       const head = Math.min(t.head, t.total);
       if (tail >= t.total) {
         t.active = false;
@@ -403,13 +418,17 @@ export class Effects {
       t.mesh.scale.z = segLen;
       // keep ~2-3 px wide on screen regardless of distance (thin ink stroke, never a beam)
       const mid = tv.copy(t.from).addScaledVector(t.dir, (tail + head) / 2);
-      const w = Math.max(t.thick, this.camPos.distanceTo(mid) * 0.0032);
+      const pixel = Math.max(0.05, this.camPos.distanceTo(mid)) * this.pixelWorldScale;
+      const w = Math.min(Math.max(t.thick, pixel * 1.5), pixel * 3);
       t.mesh.scale.x = t.mesh.scale.y = w;
     }
     for (const f of this.flashes) {
       if (!f.s.visible) continue;
-      f.life -= dt;
-      if (f.life <= 0) f.s.visible = false;
+      if (f.follow && !f.follow(f.s.position)) { f.s.visible = false; f.follow = undefined; continue; }
+      if (f.fresh) { f.fresh = false; continue; }
+      f.life -= shotDt;
+      f.s.material.opacity = Math.max(0, f.life / 0.04);
+      if (f.life <= 0) { f.s.visible = false; f.follow = undefined; }
     }
   }
 }

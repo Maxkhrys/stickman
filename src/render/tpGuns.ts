@@ -8,6 +8,12 @@ import { SAND } from './sand';
 // with baked vertex colours so every character's gun is a single instanced draw.
 // Frame: grip (right hand) at the origin, bore along -Z.
 
+/** Barrel tips in the same grip-local frame as the baked gun meshes below. */
+export const TP_MUZZLES: Record<WeaponId, readonly [number, number, number]> = {
+  ar: [0, 0.06, -0.66], smg: [0, 0.06, -0.462], carbine: [0, 0.06, -0.7788],
+  sniper: [0, 0.06, -0.935], pistol: [0, 0.045, -0.21], melee: [0, 0, -0.24],
+};
+
 type Piece = { geo: THREE.BufferGeometry; color: number; pos: [number, number, number]; rot?: [number, number, number] };
 
 function bake(pieces: Piece[]): THREE.BufferGeometry {

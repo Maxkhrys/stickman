@@ -11,6 +11,7 @@ import type { NetworkAdapter } from '../net/NetworkAdapter';
 import { GameRenderer } from '../render/GameRenderer';
 import { dustColor } from '../render/CharacterRenderer';
 import { aimAngles, computeSpread, traceFireLine } from '../sim/combat';
+import { cameraAimDirection } from '../sim/cameraAim';
 import { eyePos, type Fighter } from '../sim/fighter';
 import { TICK_DT } from '../sim/match';
 import { emptyCommand, type GameEvent, type HitPart, type WeaponId } from '../sim/types';
@@ -27,15 +28,6 @@ const tv2 = new THREE.Vector3();
 const tv3 = new THREE.Vector3();
 
 const PART_LABEL: Record<HitPart, string> = { head: 'head', chest: 'upper chest', stomach: 'stomach', limb: 'limb' };
-
-/** Drawn shot strokes per weapon: pen weight, ink, speed and dash length (hitscan: visual only). */
-const TRACER_STYLE: Record<string, { w: number; color: number; enemy: number; speed: number; len: number }> = {
-  ar: { w: 0.022, color: 0x1b1b24, enemy: 0xe8327f, speed: 330, len: 3.2 }, // thin marker streak
-  smg: { w: 0.02, color: 0x2b2d42, enemy: 0xe8327f, speed: 300, len: 1.8 }, // short rough scribble
-  carbine: { w: 0.014, color: 0x14141c, enemy: 0xe8327f, speed: 380, len: 4.2 }, // clean fine-point line
-  sniper: { w: 0.03, color: 0x4a4a58, enemy: 0x4a4a58, speed: 440, len: 6.5 }, // sharp graphite streak
-  pistol: { w: 0.032, color: 0xffc21a, enemy: 0xff4f9a, speed: 280, len: 1.3 }, // highlighter dash
-};
 
 export class App {
   readonly settings: Settings = loadSettings();
@@ -208,9 +200,25 @@ export class App {
     }
     if (this.state !== 'playing') return; // single-player pause freezes the sim
     const cmd = this.input.locked ? this.input.buildCommand() : { ...emptyCommand(), yaw: this.input.yaw, pitch: this.input.pitch };
+    const me = this.me();
+    if (me?.alive && this.renderer.thirdPersonActive && !this.renderer.inspect && me.weapons[me.cur].id !== 'melee') {
+      this.convergeCommand(cmd, me);
+    }
     this.adapter.sendCommand(cmd);
     this.adapter.tick(TICK_DT);
     for (const e of this.adapter.drainEvents()) this.onEvent(e);
+  }
+
+  /** Keep raw mouse/camera angles untouched; only the firing command converges from the eye. */
+  private convergeCommand(cmd: ReturnType<Input['buildCommand']>, me: Fighter) {
+    const time = this.adapter.info().time;
+    const recoil = aimAngles(me, time);
+    const ry = recoil.yaw - me.yaw, rp = recoil.pitch - me.pitch;
+    const view = this.renderer.aimRay(me, cmd.yaw + ry, cmd.pitch + rp);
+    const dir = cameraAimDirection({ world: this.adapter.world(), fighters: this.adapter.fighters() }, me, view.origin, view.direction);
+    cmd.moveYaw = cmd.yaw;
+    cmd.yaw = Math.atan2(-dir.x, -dir.z) - ry;
+    cmd.pitch = Math.atan2(dir.y, Math.hypot(dir.x, dir.z)) - rp;
   }
 
   private fighter(id: number) {
@@ -238,12 +246,8 @@ export class App {
         if (e.id === local) {
           // one event drives flash, kick, sound and tracer - same tick as damage and ammo
           this.sfx.shot(e.weapon, 0);
-          R.viewmodel.fire(e.weapon, R.zoom.adsE);
+          R.viewmodel.fire(e.weapon, R.zoom.adsE, !e.obstructed && !R.thirdPersonActive);
           R.punch(e.weapon === 'sniper' ? 0.08 : e.weapon === 'pistol' ? 0.04 : 0.02);
-          if (R.thirdPersonActive) {
-            tv.set(e.from.x, e.from.y, e.from.z);
-            R.effects.worldFlash(tv, e.weapon === 'sniper' ? 0.8 : 0.5);
-          } else R.localMuzzleWorld(tv);
           // latency: first shot after a fresh press (auto-fire continuation isn't a new click)
           const press = this.input.lastFirePress;
           const since = performance.now() - press;
@@ -253,14 +257,11 @@ export class App {
             if (this.latency.sim.length > 30) this.latency.sim.shift();
             this.awaitFrame = press;
           }
-          if (R.zoom.scopeCover < 0.5) { const t = TRACER_STYLE[e.weapon] ?? TRACER_STYLE.ar; R.effects.tracer(tv, tv2, t.w, t.color, 1.5 + 2.5 * R.zoom.adsE, t.speed, t.len); }
         } else {
           const [d, pan] = this.spatial(src.pos);
           this.sfx.shot(e.weapon, d, pan);
-          tv.set(e.from.x, e.from.y, e.from.z);
-          R.effects.worldFlash(tv, e.weapon === 'sniper' ? 0.8 : 0.5);
-          { const t = TRACER_STYLE[e.weapon] ?? TRACER_STYLE.ar; R.effects.tracer(tv, tv2, t.w * 1.3, t.enemy, 0, t.speed * 0.85, t.len); }
         }
+        R.queueShot(e, e.id === local);
         if (e.hitWorld && e.normal) {
           tv.set(e.normal.x, e.normal.y, e.normal.z);
           R.effects.impact(tv2, tv, tv3);
@@ -506,15 +507,11 @@ export class App {
 
     this.hud.update(fdt, me, this.adapter.fighters(), info, this.loop.fps, this.settings.showFps);
     this.hud.crosshair(computeSpread(me), z.vfov, def.id, this.renderer.thirdPersonActive ? 0 : Math.max(z.adsE, z.scopeCover), me.alive && z.scopeCover < 0.5);
-    if (this.renderer.thirdPersonActive) {
-      const aim = aimAngles(me, info.time);
-      // A copy reflects immediate mouse input without mutating authoritative state.
-      const sight = { ...me, yaw: this.input.yaw, pitch: this.input.pitch };
-      const dir = forwardFromAngles(this.input.yaw + aim.yaw - me.yaw, this.input.pitch + aim.pitch - me.pitch);
-      const trace = traceFireLine({ world: this.adapter.world(), fighters: this.adapter.fighters() }, sight, dir);
-      const point = trace.tr.point;
-      this.hud.aimPoint(this.renderer.project(tv.set(point.x, point.y, point.z)), trace.obstructed);
-    } else this.hud.aimPoint(null);
+    // Both the crosshair and hitmarker stay at screen centre. A cover warning may
+    // change their style, never their position or the mouse input.
+    const aim = aimAngles(me, info.time);
+    const sight = traceFireLine({ world: this.adapter.world(), fighters: [] }, me, forwardFromAngles(aim.yaw, aim.pitch));
+    this.hud.aimPoint(null, sight.obstructed);
     this.hud.objective(info, me);
     this.hud.sketchSlide(me.alive && me.sketchSlide);
     this.hud.scoreboard(this.showBoard && this.state === 'playing', this.adapter.fighters(), this.adapter.localId, info);

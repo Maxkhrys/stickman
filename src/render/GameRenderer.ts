@@ -4,7 +4,7 @@ import type { ObjectiveInfo } from '../sim/match';
 import { clipCamera } from './thirdPerson';
 import { MOVE } from '../config/movement';
 import { WEAPONS } from '../config/weapons';
-import { kickAt, type Fighter } from '../sim/fighter';
+import { eyePos, kickAt, type Fighter } from '../sim/fighter';
 import type { MapDef } from '../sim/map';
 import type { World } from '../sim/world';
 import { CharacterRenderer } from './CharacterRenderer';
@@ -15,6 +15,8 @@ import { Viewmodel, adsEase } from './Viewmodel';
 import { PaintLayer } from './PaintLayer';
 import type { PaintGrid } from '../sim/paint';
 import { TICK_RATE } from '../sim/match';
+import type { GameEvent } from '../sim/types';
+import { SHOT_STYLE } from './shotStyle';
 
 class Spring {
   x = 0;
@@ -84,6 +86,14 @@ export class GameRenderer {
   readonly characters: CharacterRenderer;
   readonly hitboxes = new HitboxDebug();
   readonly paint = new PaintLayer();
+  private pendingShots: { event: Extract<GameEvent, { type: 'shot' }>; local: boolean }[] = [];
+  private renderedEye = new THREE.Vector3();
+  private renderedAim = new THREE.Quaternion();
+  private aimQ = new THREE.Quaternion();
+  private aimDelta = new THREE.Quaternion();
+  private aimOffset = new THREE.Vector3();
+  private shotOrigin = new THREE.Vector3();
+  private shotEnd = new THREE.Vector3();
   private mapGroup: THREE.Group | null = null;
   private world: World | null = null;
 
@@ -169,6 +179,8 @@ export class GameRenderer {
     }
     this.characters.reset();
     this.effects.clear();
+    this.pendingShots.length = 0;
+    this.viewmodel.resetShotEffects();
     this.paint.reset();
     this.world = world;
     this.mapGroup = buildMapMesh(map);
@@ -211,6 +223,54 @@ export class GameRenderer {
     out.unproject(this.camera);
     const cp = this.camera.position;
     return out.sub(cp).normalize().multiplyScalar(0.9).add(cp);
+  }
+
+  /** Advance the last presented shoulder offset with current input/position, not a stale camera ray. */
+  aimRay(f: Fighter, yaw: number, pitch: number) {
+    const eye = eyePos(f);
+    this.aimQ.setFromEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
+    this.aimDelta.copy(this.renderedAim).invert().premultiply(this.aimQ);
+    this.aimOffset.copy(this.camera.position).sub(this.renderedEye).applyQuaternion(this.aimDelta);
+    const desired = { x: eye.x + this.aimOffset.x, y: eye.y + this.aimOffset.y, z: eye.z + this.aimOffset.z };
+    const origin = this.world ? clipCamera(this.world, eye, desired) : desired;
+    const direction = new THREE.Vector3(0, 0, -1).applyQuaternion(this.aimQ);
+    return { origin, direction };
+  }
+
+  queueShot(event: Extract<GameEvent, { type: 'shot' }>, local: boolean) {
+    if (this.pendingShots.length === 64) this.pendingShots.shift();
+    this.pendingShots.push({ event: { ...event, from: { ...event.from }, to: { ...event.to }, dir: { ...event.dir } }, local });
+  }
+
+  private flushShots() {
+    const world = this.world!;
+    for (const { event: e, local } of this.pendingShots) {
+      const style = SHOT_STYLE[e.weapon];
+      if (!style.flash) continue;
+      const origin = this.shotOrigin.set(e.from.x, e.from.y, e.from.z);
+      const firstPerson = local && !this.thirdPersonActive;
+      const socket = !firstPerson && this.characters.muzzleOf(e.id, e.weapon, origin);
+      if (firstPerson) this.localMuzzleWorld(origin);
+      // Animated geometry is cosmetic: it cannot place a tracer through cover.
+      const dx = origin.x - e.from.x, dy = origin.y - e.from.y, dz = origin.z - e.from.z;
+      const dist = Math.hypot(dx, dy, dz);
+      this.shotEnd.set(e.to.x, e.to.y, e.to.z);
+      const toEnd = this.shotEnd.clone().sub(origin), toEndLen = toEnd.length();
+      const blocked = e.obstructed ||
+        (dist > 1e-5 && !!world.raycast(e.from, { x: dx / dist, y: dy / dist, z: dz / dist }, dist)) ||
+        (toEndLen > 0.02 && !!world.raycast(origin, toEnd.divideScalar(toEndLen), toEndLen - 0.02));
+      if (blocked) origin.set(e.from.x, e.from.y, e.from.z);
+      if (!firstPerson) {
+        this.effects.worldFlash(origin, style.flash,
+          socket && !blocked ? out => this.characters.muzzleOf(e.id, e.weapon, out) : undefined);
+      }
+      if (!firstPerson || this.zoom.scopeCover < 0.5) {
+        this.shotEnd.set(e.to.x, e.to.y, e.to.z);
+        this.effects.tracer(origin, this.shotEnd, style.width, local ? style.color : style.enemy,
+          firstPerson ? 0.12 + 0.16 * this.zoom.adsE : 0, style.speed, style.length);
+      }
+    }
+    this.pendingShots.length = 0;
   }
 
   render(fi: FrameInput) {
@@ -295,8 +355,8 @@ export class GameRenderer {
         this.camera.rotation.set(-0.5, fi.viewYaw, 0.2);
       }
 
-      // Camera is presentation only. Aim remains the fighter's eye ray and the HUD
-      // projects its actual impact, so shoulder peeking never creates a camera-origin shot.
+      // Raw camera angles never chase a target. The input adapter converges the
+      // eye-origin firing command to this camera's centre ray; cover remains authoritative.
       this.thirdPersonActive = !!fi.thirdPerson && me.alive && !(def.scope && ads > 0.05);
       if (this.thirdPersonActive) {
         // Over-the-shoulder framing: the fighter sits left (or right) of the reticle, tighter when
@@ -400,6 +460,8 @@ export class GameRenderer {
         scopeCover,
       });
       this.zoom.eyepiece = this.viewmodel.eyepiece;
+      this.renderedEye.set(px, py + me.height - MOVE.eyeFromTop, pz);
+      this.renderedAim.setFromEuler(new THREE.Euler(fi.viewPitch + rp, fi.viewYaw + ry, 0, 'YXZ'));
     }
     this.camera.updateMatrixWorld();
     this.objective.update(fi.objective, fi.localId);
@@ -410,7 +472,10 @@ export class GameRenderer {
     this.paint.update(fi.orbit ? null : fi.paint ?? null, fi.fighters, Math.round(fi.time * TICK_RATE), TICK_RATE);
     this.effects.camPos.copy(this.camera.position);
     this.effects.setWorld(world);
-    this.effects.update(worldDt);
+    this.effects.pixelWorldScale = 2 * Math.tan(this.zoom.vfov / 2) / Math.max(1, window.innerHeight);
+    this.flushShots();
+    // Hit-stop may slow debris, but never turns tracers into slow homing-looking beams.
+    this.effects.update(worldDt, dt);
 
     // live scope image inside the eyepiece while it rises to the eye: its field of view matches what the
     // full-screen scope shows inside a circle of the same on-screen size, so the hand-off is seamless

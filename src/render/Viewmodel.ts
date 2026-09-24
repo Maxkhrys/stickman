@@ -5,6 +5,7 @@ import { buildLeftGlove, buildRightGlove, buildSleeve, type HandRig } from './vm
 import { bump, clamp01, seg } from './vm/kit';
 import { buildWeaponRigs, type WeaponRig } from './vm/weapons';
 import { SAND, mineralizeRig } from './sand';
+import { markerGradient, markerStrokeMap } from './marker';
 
 class Spring {
   x = 0;
@@ -160,6 +161,8 @@ export class Viewmodel {
     this.handL = buildLeftGlove();
     this.scene.add(this.handR.group, this.handL.group, this.sleeveR, this.sleeveL);
     if (SAND.enabled) for (const g of [this.handR.group, this.handL.group, this.sleeveR, this.sleeveL]) mineralizeRig(g);
+    // first-person hands match the marker stick fighter: same dry-marker fill, sights untouched
+    for (const g of [this.handR.group, this.handL.group, this.sleeveR, this.sleeveL]) markerizeHands(g);
     const flashTex = makeFlashTexture();
     this.flash = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
     this.flashCore = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTex, color: 0xfff6d0, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
@@ -560,4 +563,16 @@ export class Viewmodel {
     c.visible = true;
     this.droppedMag = { obj: c, t: 0 };
   }
+}
+
+/** Dark dry-marker fill for the first-person hands and forearms (outline hulls and sights untouched). */
+function markerizeHands(root: THREE.Object3D) {
+  root.traverse((o) => {
+    if (!(o instanceof THREE.Mesh) || o.name === 'outline' || !(o.material instanceof THREE.MeshToonMaterial)) return;
+    const m = o.material.clone();
+    m.color.set(0x4a4a56);
+    m.map = markerStrokeMap();
+    m.gradientMap = markerGradient();
+    o.material = m;
+  });
 }

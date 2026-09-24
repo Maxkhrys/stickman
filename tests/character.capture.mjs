@@ -13,6 +13,7 @@ const filter = process.argv[2] ?? '';
 const server = await createServer({ server: { host: '127.0.0.1', port: 5196 }, logLevel: 'error' });
 await server.listen();
 const browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, async () => { await browser.close().catch(() => {}); process.exit(1); });
 const W = Number(process.env.CAP_W ?? 900), H = Number(process.env.CAP_H ?? 600);
 const page = await browser.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
 const errors = [];

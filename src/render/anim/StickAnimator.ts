@@ -141,6 +141,12 @@ export class StickAnim {
   ];
   readonly headQuat = new THREE.Quaternion();
   state = 'idle';
+  /** one-shot presentation cues this frame (renderer turns them into marker smears): 0 = none */
+  cue = 0;
+  cueStrength = 0;
+  private wasSliding = false;
+  private fastT = -9;
+  private stopArmed = false;
 
   private init = false;
   private lastPos = V();
@@ -218,6 +224,13 @@ export class StickAnim {
       this.lastLand = f.lastLandTime;
       if (time - f.lastLandTime < 0.1) this.land.v -= Math.min(f.lastLandSpeed, 22) * 0.075;
     }
+    // cues: 1 = slide start, 2 = heavy landing, 3 = hard stop (sparse; the renderer rate-limits)
+    this.cue = 0;
+    if (slide && !this.wasSliding) { this.cue = 1; this.cueStrength = hs; }
+    else if (grounded && !this.grounded && f.lastLandSpeed > 9) { this.cue = 2; this.cueStrength = f.lastLandSpeed; }
+    else if (grounded && !slide && this.stopArmed && hs < 2.5 && this.clock - this.fastT < 0.5) { this.cue = 3; this.cueStrength = 8; this.stopArmed = false; }
+    if (hs > 6.5) { this.fastT = this.clock; this.stopArmed = true; }
+    this.wasSliding = slide;
     this.airT = grounded ? 0 : this.airT + dt;
     this.grounded = grounded;
     spring1(this.land, 17, 0.62, dt);
@@ -426,8 +439,7 @@ export class StickAnim {
       ft.mode = FootMode.Planted;
       this.reachable(ft, t1.copy(ft.out));
       ft.plant.set(t1.x, v.pos.y + BODY.ankleY, t1.z);
-      ft.inert.subVectors(ft.out, ft.plant);
-      ft.inert.y = Math.max(-0.1, Math.min(0.25, ft.inert.y));
+      ft.inert.set(0, Math.max(-0.1, Math.min(0.25, ft.out.y - ft.plant.y)), 0);
     }
   }
 
@@ -891,41 +903,40 @@ export class StickAnim {
   }
 
   private tailsUpdate(dt: number) {
+    // short ribbon ends: they trail the head's motion and settle behind it instead of flying around
     const P = this.pose;
     const q = this.headQuat;
-    const back = t1.set(0, 0.07, 0.17).applyQuaternion(q).add(t2.set(P.head.x, P.head.y, P.head.z));
+    const back = t1.set(0, 0.06, 0.18).applyQuaternion(q).add(t2.set(P.head.x, P.head.y, P.head.z));
     const rt = t3.set(1, 0, 0).applyQuaternion(q);
+    const bk = t4.set(0, -0.55, 1).applyQuaternion(q).normalize();
     const h = dt > 0 ? Math.min(dt, 1 / 30) : 0;
     for (let tIdx = 0; tIdx < 2; tIdx++) {
       const pts = this.tails[tIdx], prev = this.tailsPrev[tIdx];
-      pts[0].copy(back).addScaledVector(rt, tIdx ? 0.025 : -0.025);
+      const side = tIdx ? 0.022 : -0.022;
+      pts[0].copy(back).addScaledVector(rt, side);
       prev[0].copy(pts[0]);
+      const seg = tIdx ? 0.075 : 0.09;
       if (h > 0) {
         for (let i = 1; i < 3; i++) {
           const p = pts[i], o = prev[i];
-          const vx = (p.x - o.x) * 0.92, vy = (p.y - o.y) * 0.92, vz = (p.z - o.z) * 0.92;
+          const vx = (p.x - o.x) * 0.82, vy = (p.y - o.y) * 0.82, vz = (p.z - o.z) * 0.82;
           o.copy(p);
-          p.x += vx + rt.x * (tIdx ? 0.3 : -0.3) * h * h;
-          p.y += vy - 9 * h * h;
-          p.z += vz + rt.z * (tIdx ? 0.3 : -0.3) * h * h;
+          p.x += vx;
+          p.y += vy - 4 * h * h;
+          p.z += vz;
+          // soft pull toward the rest pose trailing behind the head
+          const k = 1 - Math.exp(-10 * h);
+          p.x += (pts[0].x + (bk.x + rt.x * side * 6) * seg * i - p.x) * k;
+          p.y += (pts[0].y + bk.y * seg * i - p.y) * k;
+          p.z += (pts[0].z + (bk.z + rt.z * side * 6) * seg * i - p.z) * k;
         }
       }
-      const seg = tIdx ? 0.12 : 0.15;
-      for (let it = 0; it < 2; it++) {
-        for (let i = 1; i < 3; i++) {
-          const a = pts[i - 1], b = pts[i];
-          t4.subVectors(b, a);
-          const d = t4.length() || 1e-4;
-          b.copy(a).addScaledVector(t4, seg / d);
-        }
-        // keep the tails outside the head
-        for (let i = 1; i < 3; i++) {
-          const p = pts[i];
-          t4.set(p.x - P.head.x, p.y - P.head.y, p.z - P.head.z);
-          const d = t4.length();
-          const r = STICK.headR + 0.03;
-          if (d < r) p.set(P.head.x, P.head.y, P.head.z).addScaledVector(t4, r / (d || 1e-4));
-        }
+      for (let i = 1; i < 3; i++) {
+        const a = pts[i - 1], b = pts[i];
+        const d = b.distanceTo(a) || 1e-4;
+        b.lerp(a, 1 - seg / d);
+        const hx = b.x - P.head.x, hy = b.y - P.head.y, hz = b.z - P.head.z, hd = Math.hypot(hx, hy, hz), r = STICK.headR + 0.02;
+        if (hd < r) b.set(P.head.x + (hx / (hd || 1e-4)) * r, P.head.y + (hy / (hd || 1e-4)) * r, P.head.z + (hz / (hd || 1e-4)) * r);
       }
     }
   }

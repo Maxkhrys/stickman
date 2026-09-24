@@ -21,6 +21,7 @@ const port = 5200 + Math.floor(Math.random() * 50);
 const server = await createServer({ server: { host: '127.0.0.1', port }, logLevel: 'error' });
 await server.listen();
 const browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--autoplay-policy=no-user-gesture-required'] });
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, async () => { await browser.close().catch(() => {}); process.exit(1); });
 const page = await browser.newPage({ viewport: { width: 640, height: 420 }, deviceScaleFactor: 1 });
 const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));

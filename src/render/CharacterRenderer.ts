@@ -12,6 +12,7 @@ import { toonGradient } from './vm/kit';
 import { SAND, graphiteGrainMap, sandMaterial } from './sand';
 import { STICK, StickAnim, type AnimView } from './anim/StickAnimator';
 import { AnimDebug } from './anim/AnimDebug';
+import { markerGradient, markerStrokeMap, wobbleHull } from './marker';
 
 // ============================================================================
 //  Instanced stick fighters. Every body part of every character goes through a
@@ -27,7 +28,7 @@ const INK = new THREE.Color(0x0e0e14);
 const WHITE = new THREE.Color(0xffffff);
 const PROTECT = new THREE.Color(0xffd23f);
 /** graphite body; a fighter's ink only tints it, the headband carries the full colour */
-const GRAPHITE = new THREE.Color(0x202129);
+const GRAPHITE = new THREE.Color(0x3a3a46);
 
 /** Dark granular material a fighter's body turns into when it tears or collapses. */
 export function dustColor(color: number): number {
@@ -39,9 +40,9 @@ class Batch {
   readonly line: THREE.InstancedMesh;
   n = 0;
   private m = new THREE.Matrix4();
-  constructor(geo: THREE.BufferGeometry, mat: THREE.Material, max: number, lineMat: THREE.Material) {
+  constructor(geo: THREE.BufferGeometry, mat: THREE.Material, max: number, lineMat: THREE.Material, lineGeo = geo) {
     this.fill = new THREE.InstancedMesh(geo, mat, max);
-    this.line = new THREE.InstancedMesh(geo, lineMat, max);
+    this.line = new THREE.InstancedMesh(lineGeo, lineMat, max);
     for (const im of [this.fill, this.line]) {
       im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       im.frustumCulled = false;
@@ -173,15 +174,19 @@ export class CharacterRenderer {
   private line = new THREE.Color();
 
   constructor(private effects: Effects, maxChars = 12) {
-    const toonMat = () => new THREE.MeshToonMaterial({ color: 0xffffff, gradientMap: toonGradient(), map: SAND.enabled ? graphiteGrainMap() : null });
+    // dense dry marker: limb-following streaks, restrained two-band toon shading, no highlight
+    const toonMat = () => new THREE.MeshToonMaterial({ color: 0xffffff, gradientMap: markerGradient(), map: SAND.enabled ? markerStrokeMap() : graphiteGrainMap() });
     const lineMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.BackSide });
     const guns = buildTpGuns();
     const gunMat = sandMaterial(new THREE.MeshToonMaterial({ color: 0xffffff, gradientMap: toonGradient(), vertexColors: true }));
+    const sphere = new THREE.SphereGeometry(1, 10, 8), head = new THREE.SphereGeometry(1, 24, 16), cyl = new THREE.CylinderGeometry(1, 1, 1, 9, 3, true);
+    // ink hulls carry a fixed hand-drawn wobble (object space: moves with the limb, never boils)
+    const hulls: Partial<Record<PrimId, THREE.BufferGeometry>> = { sphere: wobbleHull(sphere, 0.07, 1), head: wobbleHull(head, 0.035, 2), cyl: wobbleHull(cyl, 0.1, 3) };
     const defs: [PrimId, THREE.BufferGeometry, THREE.Material, number][] = [
-      ['sphere', new THREE.SphereGeometry(1, 10, 8), toonMat(), 26],
-      ['head', new THREE.SphereGeometry(1, 24, 16), toonMat(), 1],
-      ['cyl', new THREE.CylinderGeometry(1, 1, 1, 9, 1, true), toonMat(), 24],
-      ['torus', new THREE.TorusGeometry(1, 0.2, 6, 20), toonMat(), 1],
+      ['sphere', sphere, toonMat(), 26],
+      ['head', head, toonMat(), 1],
+      ['cyl', cyl, toonMat(), 26],
+      ['torus', new THREE.TorusGeometry(1, 0.075, 5, 28), new THREE.MeshToonMaterial({ color: 0xffffff, gradientMap: toonGradient() }), 2],
       ['gun_ar', guns.ar, gunMat, 1],
       ['gun_sniper', guns.sniper, gunMat, 1],
       ['gun_pistol', guns.pistol, gunMat, 1],
@@ -190,7 +195,7 @@ export class CharacterRenderer {
       ['gun_carbine', guns.carbine, gunMat, 1],
     ];
     for (const [id, geo, mat, perChar] of defs) {
-      const b = new Batch(geo, mat, perChar * maxChars, lineMat);
+      const b = new Batch(geo, mat, perChar * maxChars, lineMat, hulls[id]);
       this.batches.set(id, b);
       this.group.add(b.line, b.fill);
     }
@@ -383,6 +388,13 @@ export class CharacterRenderer {
         if (c.seen !== this.pass - 1) c.anim.reset();
         c.seen = this.pass;
         if (!frozen) this.pose(f, c, alpha, time, dt, world);
+        if (!frozen && c.anim.cue && SAND.enabled) {
+          // sparse marker smears: slide starts, heavy landings, hard stops (never on the crosshair: floor only)
+          const hv = Math.hypot(f.vel.x, f.vel.z) || 1;
+          const dx = c.anim.cue === 3 ? -Math.sin(f.lowerYaw) : f.vel.x / hv, dz = c.anim.cue === 3 ? -Math.cos(f.lowerYaw) : f.vel.z / hv;
+          const len = c.anim.cue === 1 ? 1.4 : c.anim.cue === 2 ? 0.5 + c.anim.cueStrength * 0.05 : 0.7;
+          this.effects.markerSmear(f.pos.x + dx * len * 0.35, f.pos.y, f.pos.z + dz * len * 0.35, dx, dz, len, c.anim.cue === 2 ? 0.45 : 0.26);
+        }
         if (dbg.active) dbg.add(c.anim);
         if (SAND.enabled && !frozen) {
           c.weaponTick += dt;
@@ -467,7 +479,7 @@ export class CharacterRenderer {
     // head
     const qH = c.dead ? tq2.setFromUnitVectors(Y, V(sk.headUp, tv)) : tq2.copy(c.anim.headQuat);
     this.emit('head', jp.head, qH, ts.set(S.headR, S.headR, S.headR), body, 'uniform', line);
-    if (!c.dead || !c.headPop) this.headband(c, jp.head, qH, accent, line);
+    if (!c.dead || !c.headPop) this.headband(c, f.id, jp.head, qH, accent, line);
     // arms: clavicle, upper arm, forearm, hand
     for (const side of [0, 1]) {
       const sh = side ? jp.rShoulder : jp.lShoulder, el = side ? jp.rElbow : jp.lElbow, ha = side ? jp.rHand : jp.lHand;
@@ -499,16 +511,20 @@ export class CharacterRenderer {
   }
 
   /** Player-ink headband with two trailing tails: the one splash of colour on a graphite fighter. */
-  private headband(c: CharState, head: THREE.Vector3, qH: THREE.Quaternion, accent: THREE.Color, line: THREE.Color) {
+  private headband(c: CharState, id: number, head: THREE.Vector3, qH: THREE.Quaternion, accent: THREE.Color, line: THREE.Color) {
+    // a thin painted stripe around the head (no ink hull, it reads as colour laid on the marker)
     const r = STICK.headR;
     tq.copy(qH).multiply(RING);
-    tv3.set(0, 0.055, 0).applyQuaternion(qH).add(head);
-    this.emit('torus', tv3, tq, ts.set(r * 1.02, r * 1.02, r * 0.9), accent, 'uniform', line);
+    tv3.set(0, 0.06, 0).applyQuaternion(qH).add(head);
+    this.emit('torus', tv3, tq, ts.set(r * 1.005, r * 1.005, r), accent, 'none', line);
     if (c.dead) return;
-    for (const tail of c.anim.tails) {
+    // short ribbon ends; one or two by fighter so silhouettes differ without relying on colour
+    const tails = id % 2 ? 1 : 2;
+    for (let k = 0; k < tails; k++) {
+      const tail = c.anim.tails[k];
       for (let i = 1; i < tail.length; i++) {
-        this.limb(tail[i - 1], tail[i], 0.02, accent, line);
-        this.ball(tail[i], 0.02, accent, line);
+        this.limb(tail[i - 1], tail[i], 0.013 - i * 0.002, accent, line);
+        this.ball(tail[i], 0.013 - i * 0.002, accent, line);
       }
     }
   }

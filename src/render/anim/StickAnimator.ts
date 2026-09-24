@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { MOVE } from '../../config/movement';
 import { WEAPONS } from '../../config/weapons';
-import { BODY, buildSkeleton, createSkeleton, ik, strideLength, type BodyState, type Skeleton } from '../../sim/body';
+import { BODY, buildSkeleton, createSkeleton, gaitDuty, ik, strideLength, type BodyState, type Skeleton } from '../../sim/body';
 import type { Fighter } from '../../sim/fighter';
 import type { WeaponId } from '../../sim/types';
 import type { Vec3 } from '../../sim/vec';
@@ -45,6 +45,12 @@ export const STICK = {
 
 const V = () => new THREE.Vector3();
 
+/** joints compared against the hitbox skeleton (damage-bearing ones; feet planted by design) */
+const DEV_JOINTS = ['head', 'chest', 'pelvis', 'lShoulder', 'rShoulder', 'lHand', 'rHand', 'lKnee', 'rKnee'] as const;
+
+/** Longest ground distance one stance may cover (m): the leg reaches +-0.36 around the hip. */
+const STANCE_SPAN = 0.72;
+
 const enum FootMode {
   Planted,
   Swing,
@@ -73,12 +79,20 @@ interface Foot {
   toePitch: number;
   /** debug: where this foot wants to be */
   goal: THREE.Vector3;
+  /** freshly predicted touchdown; `target` chases it at a bounded speed, then commits near landing */
+  pred: THREE.Vector3;
+  /** swing endpoints relative to the body (x/z), and the swing's duration in seconds */
+  fromRel: THREE.Vector3;
+  toRel: THREE.Vector3;
+  swingT: number;
+  /** post-IK distance between where the foot should be and where the leg actually put it */
+  ikErr: number;
 }
 
 function mkFoot(side: -1 | 1): Foot {
   return {
     side, mode: FootMode.Planted, phased: false,
-    plant: V(), from: V(), target: V(), out: V(), prevOut: V(), off: V(), offV: V(), inert: V(), goal: V(),
+    plant: V(), from: V(), target: V(), out: V(), prevOut: V(), off: V(), offV: V(), inert: V(), goal: V(), pred: V(), fromRel: V(), toRel: V(), swingT: 0.16, ikErr: 0,
     yaw: 0, fromYaw: 0, targetYaw: 0, s: 0, u0: 0, groundY: 0, toePitch: 0,
   };
 }
@@ -86,6 +100,8 @@ function mkFoot(side: -1 | 1): Foot {
 /** Mutable interpolated view of a fighter, the input to both skeletons. */
 export interface AnimView extends BodyState {
   alive: boolean;
+  /** collision-resolved travel speed from the sim (m/s) */
+  travelSpeed?: number;
 }
 
 // scratch
@@ -125,6 +141,12 @@ export class StickAnim {
   ];
   readonly headQuat = new THREE.Quaternion();
   state = 'idle';
+  /** one-shot presentation cues this frame (renderer turns them into marker smears): 0 = none */
+  cue = 0;
+  cueStrength = 0;
+  private wasSliding = false;
+  private fastT = -9;
+  private stopArmed = false;
 
   private init = false;
   private lastPos = V();
@@ -151,6 +173,15 @@ export class StickAnim {
   private moving = false;
   private breath = Math.random() * 10;
   private stepCooldown = 0;
+  private yawFollow = false;
+  private yawInert = 0;
+  private lastLowerYaw = 0;
+  private contactTimes: number[] = [];
+  private clock = 0;
+  /** diagnostics for the debug panel and capture harness */
+  readonly diag = { cadence: 0, plantError: 0, twist: 0, travel: 0, stance: '--', jointDev: 0, jointDevName: '' };
+  /** max post-IK plant error this frame (m) */
+  plantError = 0;
 
   /** kick the upper body away from a hit (world direction) */
   hurt(dx: number, dz: number, strength = 1) {
@@ -172,7 +203,9 @@ export class StickAnim {
     const w = f.weapons[f.cur].id as WeaponId;
     const auth = buildSkeleton(v, w, this.auth);
     const P = this.pose;
-    const hs = Math.hypot(v.vel.x, v.vel.z);
+    // legs follow collision-resolved travel (walls stop the cycle); velocity only predicts touchdowns
+    const hs = v.travelSpeed ?? Math.hypot(v.vel.x, v.vel.z);
+    this.clock += dt;
     const pos = t4.set(v.pos.x, v.pos.y, v.pos.z);
     if (!this.init || pos.distanceTo(this.lastPos) > 2.5) this.snap(v, world);
     this.lastPos.copy(pos);
@@ -191,6 +224,13 @@ export class StickAnim {
       this.lastLand = f.lastLandTime;
       if (time - f.lastLandTime < 0.1) this.land.v -= Math.min(f.lastLandSpeed, 22) * 0.075;
     }
+    // cues: 1 = slide start, 2 = heavy landing, 3 = hard stop (sparse; the renderer rate-limits)
+    this.cue = 0;
+    if (slide && !this.wasSliding) { this.cue = 1; this.cueStrength = hs; }
+    else if (grounded && !this.grounded && f.lastLandSpeed > 9) { this.cue = 2; this.cueStrength = f.lastLandSpeed; }
+    else if (grounded && !slide && this.stopArmed && hs < 2.5 && this.clock - this.fastT < 0.5) { this.cue = 3; this.cueStrength = 8; this.stopArmed = false; }
+    if (hs > 6.5) { this.fastT = this.clock; this.stopArmed = true; }
+    this.wasSliding = slide;
     this.airT = grounded ? 0 : this.airT + dt;
     this.grounded = grounded;
     spring1(this.land, 17, 0.62, dt);
@@ -201,9 +241,30 @@ export class StickAnim {
     // ---------------- pelvis ----------------
     const aimYaw = v.yaw;
     if (this.moving || !grounded || slide) {
+      // Hips follow the sim's lower-body yaw exactly (the sim already rate-limits it), so there is no
+      // second damping stage. Discontinuities (leaving a turn-in-place hold, the sim's hard 80 degree
+      // clamp during a sharp reversal) become an inertial offset that decays to zero.
       this.turning = false;
-      cdAngle(this.pelvisYaw, v.lowerYaw, 16, dt);
+      if (!this.yawFollow) {
+        this.yawInert = wrapAngle(this.pelvisYaw.x - v.lowerYaw);
+        this.yawFollow = true;
+      } else {
+        const jump = wrapAngle(v.lowerYaw - this.lastLowerYaw);
+        const lim = 14 * dt;
+        if (Math.abs(jump) > lim) this.yawInert -= jump - clamp(jump, -lim, lim);
+      }
+      this.yawInert = wrapAngle(this.yawInert) * Math.exp(-14 * dt);
+      let py = v.lowerYaw + this.yawInert;
+      // bounded torso twist: hips never end up further than 100 degrees from the aim
+      const tw = wrapAngle(py - aimYaw);
+      if (Math.abs(tw) > 1.75) {
+        py = aimYaw + Math.sign(tw) * 1.75;
+        this.yawInert = wrapAngle(py - v.lowerYaw);
+      }
+      this.pelvisYaw.x = py;
+      this.pelvisYaw.v = 0;
     } else {
+      this.yawFollow = false;
       // turn in place: hips hold until the aim twists them too far, then pivot with a step
       const d = wrapAngle(aimYaw - this.pelvisYaw.x);
       if (Math.abs(d) > 0.8) this.turning = true;
@@ -212,7 +273,11 @@ export class StickAnim {
         cdAngle(this.pelvisYaw, goal, 11, dt);
         if (Math.abs(wrapAngle(goal - this.pelvisYaw.x)) < 0.04) this.turning = false;
       } else cdAngle(this.pelvisYaw, this.pelvisYaw.x, 11, dt);
+      // a flick faster than the pivot still never twists the torso past 100 degrees
+      const tw = wrapAngle(this.pelvisYaw.x - aimYaw);
+      if (Math.abs(tw) > 1.75) this.pelvisYaw.x = aimYaw + Math.sign(tw) * 1.75;
     }
+    this.lastLowerYaw = v.lowerYaw;
     const pYaw = this.pelvisYaw.x;
     PF.set(-Math.sin(pYaw), 0, -Math.cos(pYaw));
     PR.set(Math.cos(pYaw), 0, -Math.sin(pYaw));
@@ -258,7 +323,7 @@ export class StickAnim {
 
     // ---------------- feet ----------------
     const hold = HOLDS[w];
-    this.feetUpdate(f, v, dt, world, hs, crouch, hold.stagger, pel, runN);
+    this.feetUpdate(f, v, dt, world, hs, crouch, hold.stagger, pel);
     // drop the pelvis so planted feet stay reachable (slopes, steps, long strides)
     let drop = -Infinity;
     for (const ft of this.feet) {
@@ -269,7 +334,10 @@ export class StickAnim {
       drop = Math.max(drop, hip.y - (ft.out.y + maxH * 0.985));
     }
     const dropNow = this.pelvisDrop.x;
-    cd1(this.pelvisDrop, drop === -Infinity ? 0 : clamp(drop + dropNow, 0, 0.3), 30, dt);
+    const dropT = drop === -Infinity ? 0 : clamp(drop + dropNow, 0, 0.3);
+    // sink immediately when a planted foot needs it (a late sink would stretch the leg this frame),
+    // rise back smoothly
+    if (dropT > dropNow) { this.pelvisDrop.x = dropT; this.pelvisDrop.v = 0; } else cd1(this.pelvisDrop, dropT, 30, dt);
     const dd = this.pelvisDrop.x - dropNow;
     P.pelvis.y -= dd;
     P.lHip.y -= dd;
@@ -286,10 +354,24 @@ export class StickAnim {
       const fy = ft.yaw;
       const kx = -Math.sin(fy) + PR.x * s * 0.15, kz = -Math.cos(fy) + PR.z * s * 0.15;
       ik(hip, ankle, BODY.thigh, BODY.shin, kx, 0.05, kz, knee);
+      // audit the FINAL ankle: ik() pulls an unreachable ankle in, which would silently drag a plant
+      ft.ikErr = Math.hypot(ankle.x - ft.out.x, ankle.y - ft.out.y, ankle.z - ft.out.z);
       const cp = Math.cos(ft.toePitch), sp = Math.sin(ft.toePitch);
       toe.x = ankle.x - Math.sin(fy) * BODY.footLen * cp;
       toe.y = ankle.y - 0.03 + sp * BODY.footLen;
       toe.z = ankle.z - Math.cos(fy) * BODY.footLen * cp;
+    }
+
+    this.plantError = 0;
+    for (const ft of this.feet) if (ft.mode === FootMode.Planted) this.plantError = Math.max(this.plantError, ft.ikErr);
+    {
+      const d = this.diag;
+      while (this.contactTimes.length && this.clock - this.contactTimes[0] > 1) this.contactTimes.shift();
+      d.cadence = this.contactTimes.length;
+      d.plantError = this.plantError;
+      d.twist = Math.abs(wrapAngle(v.yaw - this.pelvisYaw.x));
+      d.travel = hs;
+      d.stance = this.feet.map((ft) => (ft.mode === FootMode.Planted ? 'S' : ft.mode === FootMode.Swing ? 'w' : 'a')).join('');
     }
 
     // ---------------- spine ----------------
@@ -335,6 +417,15 @@ export class StickAnim {
 
     // ---------------- secondary ----------------
     this.tailsUpdate(dt);
+    // how far the drawn joints sit from the authoritative (hitbox) skeleton
+    let dev = 0, devName = '';
+    for (const k of DEV_JOINTS) {
+      const a = auth[k] as Vec3, b = P[k] as Vec3;
+      const e = Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+      if (e > dev) { dev = e; devName = k; }
+    }
+    this.diag.jointDev = dev;
+    this.diag.jointDevName = devName;
     this.state = !v.alive ? 'dead' : slide ? 'slide' : !grounded ? (v.vel.y > 0 ? 'jump' : 'fall') : this.moving ? (hs > MOVE.maxSpeed * 0.85 ? 'sprint' : hs > 3.5 ? 'run' : 'walk') : this.turning ? 'turn' : crouch > 0.5 ? 'crouch' : 'idle';
     this.lastYaw = v.yaw;
     this.lastPitch = v.pitch;
@@ -346,9 +437,9 @@ export class StickAnim {
     for (const ft of this.feet) {
       if (ft.mode !== FootMode.Free) continue;
       ft.mode = FootMode.Planted;
-      ft.plant.set(ft.out.x, v.pos.y + BODY.ankleY, ft.out.z);
-      ft.inert.subVectors(ft.out, ft.plant);
-      ft.inert.y = Math.max(-0.1, Math.min(0.25, ft.inert.y));
+      this.reachable(ft, t1.copy(ft.out));
+      ft.plant.set(t1.x, v.pos.y + BODY.ankleY, t1.z);
+      ft.inert.set(0, Math.max(-0.1, Math.min(0.25, ft.out.y - ft.plant.y)), 0);
     }
   }
 
@@ -359,6 +450,10 @@ export class StickAnim {
     this.pelvisH.v = 0;
     this.pelvisYaw.x = v.lowerYaw;
     this.pelvisYaw.v = 0;
+    this.yawFollow = false;
+    this.yawInert = 0;
+    this.lastLowerYaw = v.lowerYaw;
+    this.contactTimes.length = 0;
     this.pelvisDrop.x = this.pelvisDrop.v = 0;
     this.land.x = this.land.v = 0;
     this.lean.set(this.auth.spineUp.x, this.auth.spineUp.y, this.auth.spineUp.z);
@@ -380,7 +475,7 @@ export class StickAnim {
       ft.yaw = ft.targetYaw = v.lowerYaw;
       if (v.onGround && !v.sliding) {
         ft.mode = FootMode.Planted;
-        ft.groundY = world.surfaceBelow(a.x, a.z, 0.04, v.pos.y + 0.3);
+        ft.groundY = this.support(world, a.x, a.z, v.pos.y);
         ft.plant.set(a.x, ft.groundY + BODY.ankleY, a.z);
         ft.out.copy(ft.plant);
       } else {
@@ -397,7 +492,7 @@ export class StickAnim {
     this.init = true;
   }
 
-  private feetUpdate(f: Fighter, v: AnimView, dt: number, world: World, hs: number, crouch: number, stagger: number, pel: THREE.Vector3, runN: number) {
+  private feetUpdate(f: Fighter, v: AnimView, dt: number, world: World, hs: number, crouch: number, stagger: number, pel: THREE.Vector3) {
     const auth = this.auth;
     const S = strideLength(hs);
     const yawP = this.pelvisYaw.x;
@@ -455,18 +550,29 @@ export class StickAnim {
       } else {
         if (ft.mode === FootMode.Free) {
           ft.mode = FootMode.Planted;
-          ft.plant.set(ft.out.x, world.surfaceBelow(ft.out.x, ft.out.z, 0.04, v.pos.y + 0.5) + BODY.ankleY, ft.out.z);
+          this.reachable(ft, t1.copy(ft.out));
+          ft.plant.set(t1.x, this.support(world, t1.x, t1.z, v.pos.y) + BODY.ankleY, t1.z);
         }
         // ---- grounded: world-locked stance, swings to predicted landings ----
         let ph = (v.gait + (s > 0 ? Math.PI : 0)) % (Math.PI * 2);
         if (ph < 0) ph += Math.PI * 2;
         const fi = s < 0 ? 0 : 1, oi = 1 - fi;
         if (this.moving) {
-          // duty factor: long double support at a walk, flight phases at a sprint
-          const duty = 0.62 - 0.26 * runN;
+          // duty from the shared gait model, capped so a stance never outruns the leg's reach
+          const duty = Math.min(gaitDuty(hs), STANCE_SPAN / S);
           const swingStart = Math.PI * 2 * duty;
           const inSwing = ph >= swingStart;
           const u = inSwing ? (ph - swingStart) / (Math.PI * 2 - swingStart) : 0;
+          // predicted touchdown: where the body will be when this foot lands, plus half a stance ahead
+          const tRem = inSwing ? ((Math.PI * 2 - ph) / (Math.PI * 2)) * (S / Math.max(hs, 0.5)) : 0;
+          const tRemC = Math.min(tRem, 0.6);
+          const wid = 0.075 + 0.05 * crouch;
+          const reach = S * duty * 0.5;
+          ft.pred.set(
+            v.pos.x + v.vel.x * tRemC + mx * reach + frx * s * wid,
+            0,
+            v.pos.z + v.vel.z * tRemC + mz * reach + frz * s * wid,
+          );
           if (ft.mode === FootMode.Planted && inSwing && u < 0.9) {
             ft.mode = FootMode.Swing;
             ft.phased = true;
@@ -474,26 +580,35 @@ export class StickAnim {
             ft.fromYaw = ft.yaw;
             ft.u0 = Math.min(u, 0.7);
             ft.s = 0;
+            ft.target.copy(ft.pred);
+            ft.fromRel.set(ft.out.x - v.pos.x, 0, ft.out.z - v.pos.z);
+            ft.toRel.set(mx * reach + frx * s * wid, 0, mz * reach + frz * s * wid);
+            ft.swingT = ((Math.PI * 2 - swingStart) / (Math.PI * 2)) * (S / Math.max(hs, 0.5)) * (1 - ft.u0);
+          }
+          ft.pred.y = 0;
+          if (ft.mode === FootMode.Swing) {
+            // desired landing relative to the body; early corrections rate-limited, committed late
+            if (ft.s < 0.75) {
+              const tx = mx * reach + frx * s * wid, tz = mz * reach + frz * s * wid;
+              const dx = tx - ft.toRel.x, dz = tz - ft.toRel.z, dl = Math.hypot(dx, dz), mStep = 5 * dt;
+              if (dl > mStep) { ft.toRel.x += (dx / dl) * mStep; ft.toRel.z += (dz / dl) * mStep; } else ft.toRel.set(tx, 0, tz);
+            }
           }
           if (ft.mode === FootMode.Swing && ft.phased) {
             if (!inSwing) ft.s = 1;
             else ft.s = clamp((u - ft.u0) / (1 - ft.u0), ft.s, 1);
           }
-          // predicted touchdown: where the body will be when this foot lands, plus half a stance ahead
-          const tRem = inSwing ? ((Math.PI * 2 - ph) / (Math.PI * 2)) * (S / Math.max(hs, 0.5)) : 0;
-          const tRemC = Math.min(tRem, 0.6);
-          const wid = 0.075 + 0.05 * crouch;
-          const reach = S * duty * 0.5;
-          ft.target.set(
-            v.pos.x + v.vel.x * tRemC + mx * reach + frx * s * wid,
-            0,
-            v.pos.z + v.vel.z * tRemC + mz * reach + frz * s * wid,
-          );
           ft.targetYaw = yawP + s * 0.06;
-          // stance foot left far behind (knockback, teleport-ish corrections): release it
-          if (ft.mode === FootMode.Planted && Math.hypot(ft.plant.x - v.pos.x, ft.plant.z - v.pos.z) > S * 0.5 + 0.45) this.startTimedSwing(ft);
+          // stance foot left far behind (knockback, corrections), or twisted off the hips: replan it
+          if (ft.mode === FootMode.Planted && (Math.hypot(ft.plant.x - v.pos.x, ft.plant.z - v.pos.z) > STANCE_SPAN * 0.5 + 0.25 || Math.abs(wrapAngle(ft.yaw - yawP)) > 1.2)) {
+            ft.target.copy(ft.pred);
+            this.startTimedSwing(ft);
+            swinging++;
+          }
         } else {
-          ft.target.set(restX[fi], 0, restZ[fi]);
+          ft.pred.set(restX[fi], 0, restZ[fi]);
+          if (ft.mode !== FootMode.Swing) ft.target.copy(ft.pred);
+          else if (!ft.phased) ft.toRel.set(restX[fi] - v.pos.x, 0, restZ[fi] - v.pos.z);
           ft.targetYaw = restYaw[fi];
           if (ft.mode === FootMode.Swing && ft.phased) ft.phased = false; // finish the step on its own clock
           if (ft.mode === FootMode.Planted && swinging === 0 && this.stepCooldown <= 0) {
@@ -508,21 +623,36 @@ export class StickAnim {
             }
           }
         }
+        // unreachable plant (post-IK error last frame): release and replan instead of dragging it
+        if (ft.mode === FootMode.Planted && ft.ikErr > 0.012) {
+          ft.target.copy(ft.pred);
+          this.startTimedSwing(ft);
+          swinging++;
+        }
         ft.goal.set(ft.target.x, ft.plant.y, ft.target.z);
         if (ft.mode === FootMode.Swing) {
           if (!ft.phased) ft.s = Math.min(1, ft.s + dt / 0.16);
-          ft.groundY = world.surfaceBelow(ft.target.x, ft.target.z, 0.04, v.pos.y + 0.6);
+          ft.groundY = this.support(world, ft.target.x, ft.target.z, v.pos.y);
           const e = smooth01(ft.s);
           const ty = ft.groundY + BODY.ankleY;
           ft.goal.y = ty;
-          ft.out.x = ft.from.x + (ft.target.x - ft.from.x) * e;
-          ft.out.z = ft.from.z + (ft.target.z - ft.from.z) * e;
+          // body-relative cubic Hermite: tangents match ground speed, so the foot leaves and lands with
+          // no skate, kicks back briefly after toe-off and reaches forward before contact
+          const q = ft.s, q2 = q * q, q3 = q2 * q;
+          const h00 = 2 * q3 - 3 * q2 + 1, h10 = q3 - 2 * q2 + q, h01 = -2 * q3 + 3 * q2, h11 = q3 - q2;
+          const T = ft.phased ? ft.swingT : 0;
+          const m0x = -v.vel.x * T * 0.8, m0z = -v.vel.z * T * 0.8, m1x = -v.vel.x * T, m1z = -v.vel.z * T;
+          ft.out.x = v.pos.x + h00 * ft.fromRel.x + h10 * m0x + h01 * ft.toRel.x + h11 * m1x;
+          ft.out.z = v.pos.z + h00 * ft.fromRel.z + h10 * m0z + h01 * ft.toRel.z + h11 * m1z;
+          ft.target.set(v.pos.x + ft.toRel.x, 0, v.pos.z + ft.toRel.z);
           ft.out.y = ft.from.y + (ty - ft.from.y) * e + Math.sin(Math.PI * Math.min(1, ft.s * 1.08)) * (this.moving ? lift : 0.06);
           ft.yaw = ft.fromYaw + wrapAngle(ft.targetYaw - ft.fromYaw) * e;
           ft.toePitch = this.moving ? (ft.s < 0.35 ? -0.5 * Math.sin((ft.s / 0.35) * Math.PI) : 0.28 * Math.sin(((ft.s - 0.35) / 0.65) * Math.PI)) : 0;
           if (ft.s >= 1) {
+            if (this.moving) this.contactTimes.push(this.clock);
             ft.mode = FootMode.Planted;
-            ft.plant.set(ft.target.x, ty, ft.target.z);
+            this.reachable(ft, t1.set(ft.out.x, 0, ft.out.z));
+            ft.plant.set(t1.x, this.support(world, t1.x, t1.z, v.pos.y) + BODY.ankleY, t1.z);
             ft.out.copy(ft.plant);
             ft.yaw = ft.targetYaw;
           }
@@ -540,7 +670,30 @@ export class StickAnim {
     }
   }
 
+  /**
+   * Support height for a foot: the highest walkable surface near the body's own level. A ledge drop
+   * further than a step returns the body's level, so a foot at a platform edge never reaches through
+   * to the floor underneath.
+   */
+  private support(world: World, x: number, z: number, bodyY: number) {
+    const g = world.surfaceBelow(x, z, 0.04, bodyY + 0.6);
+    return g < bodyY - 0.45 ? bodyY : g;
+  }
+
+  /** Pull a touchdown point in until the leg can reach it from its hip (horizontal radius). */
+  private reachable(ft: Foot, p: THREE.Vector3) {
+    const hip = ft.side < 0 ? this.pose.lHip : this.pose.rHip;
+    const dx = p.x - hip.x, dz = p.z - hip.z, d = Math.hypot(dx, dz), max = STANCE_SPAN * 0.5 + 0.06;
+    if (d > max) {
+      p.x = hip.x + (dx / d) * max;
+      p.z = hip.z + (dz / d) * max;
+    }
+    return p;
+  }
+
   private startTimedSwing(ft: Foot) {
+    ft.fromRel.set(ft.out.x - this.lastPos.x, 0, ft.out.z - this.lastPos.z);
+    ft.toRel.set(ft.pred.x - this.lastPos.x, 0, ft.pred.z - this.lastPos.z);
     ft.mode = FootMode.Swing;
     ft.phased = false;
     ft.from.copy(ft.out);
@@ -750,41 +903,40 @@ export class StickAnim {
   }
 
   private tailsUpdate(dt: number) {
+    // short ribbon ends: they trail the head's motion and settle behind it instead of flying around
     const P = this.pose;
     const q = this.headQuat;
-    const back = t1.set(0, 0.07, 0.17).applyQuaternion(q).add(t2.set(P.head.x, P.head.y, P.head.z));
+    const back = t1.set(0, 0.06, 0.18).applyQuaternion(q).add(t2.set(P.head.x, P.head.y, P.head.z));
     const rt = t3.set(1, 0, 0).applyQuaternion(q);
+    const bk = t4.set(0, -0.55, 1).applyQuaternion(q).normalize();
     const h = dt > 0 ? Math.min(dt, 1 / 30) : 0;
     for (let tIdx = 0; tIdx < 2; tIdx++) {
       const pts = this.tails[tIdx], prev = this.tailsPrev[tIdx];
-      pts[0].copy(back).addScaledVector(rt, tIdx ? 0.025 : -0.025);
+      const side = tIdx ? 0.022 : -0.022;
+      pts[0].copy(back).addScaledVector(rt, side);
       prev[0].copy(pts[0]);
+      const seg = tIdx ? 0.075 : 0.09;
       if (h > 0) {
         for (let i = 1; i < 3; i++) {
           const p = pts[i], o = prev[i];
-          const vx = (p.x - o.x) * 0.92, vy = (p.y - o.y) * 0.92, vz = (p.z - o.z) * 0.92;
+          const vx = (p.x - o.x) * 0.82, vy = (p.y - o.y) * 0.82, vz = (p.z - o.z) * 0.82;
           o.copy(p);
-          p.x += vx + rt.x * (tIdx ? 0.3 : -0.3) * h * h;
-          p.y += vy - 9 * h * h;
-          p.z += vz + rt.z * (tIdx ? 0.3 : -0.3) * h * h;
+          p.x += vx;
+          p.y += vy - 4 * h * h;
+          p.z += vz;
+          // soft pull toward the rest pose trailing behind the head
+          const k = 1 - Math.exp(-10 * h);
+          p.x += (pts[0].x + (bk.x + rt.x * side * 6) * seg * i - p.x) * k;
+          p.y += (pts[0].y + bk.y * seg * i - p.y) * k;
+          p.z += (pts[0].z + (bk.z + rt.z * side * 6) * seg * i - p.z) * k;
         }
       }
-      const seg = tIdx ? 0.12 : 0.15;
-      for (let it = 0; it < 2; it++) {
-        for (let i = 1; i < 3; i++) {
-          const a = pts[i - 1], b = pts[i];
-          t4.subVectors(b, a);
-          const d = t4.length() || 1e-4;
-          b.copy(a).addScaledVector(t4, seg / d);
-        }
-        // keep the tails outside the head
-        for (let i = 1; i < 3; i++) {
-          const p = pts[i];
-          t4.set(p.x - P.head.x, p.y - P.head.y, p.z - P.head.z);
-          const d = t4.length();
-          const r = STICK.headR + 0.03;
-          if (d < r) p.set(P.head.x, P.head.y, P.head.z).addScaledVector(t4, r / (d || 1e-4));
-        }
+      for (let i = 1; i < 3; i++) {
+        const a = pts[i - 1], b = pts[i];
+        const d = b.distanceTo(a) || 1e-4;
+        b.lerp(a, 1 - seg / d);
+        const hx = b.x - P.head.x, hy = b.y - P.head.y, hz = b.z - P.head.z, hd = Math.hypot(hx, hy, hz), r = STICK.headR + 0.02;
+        if (hd < r) b.set(P.head.x + (hx / (hd || 1e-4)) * r, P.head.y + (hy / (hd || 1e-4)) * r, P.head.z + (hz / (hd || 1e-4)) * r);
       }
     }
   }

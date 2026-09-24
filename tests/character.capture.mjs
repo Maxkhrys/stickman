@@ -13,6 +13,7 @@ const filter = process.argv[2] ?? '';
 const server = await createServer({ server: { host: '127.0.0.1', port: 5196 }, logLevel: 'error' });
 await server.listen();
 const browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, async () => { await browser.close().catch(() => {}); process.exit(1); });
 const W = Number(process.env.CAP_W ?? 900), H = Number(process.env.CAP_H ?? 600);
 const page = await browser.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
 const errors = [];
@@ -30,9 +31,10 @@ page.on('pageerror', (e) => errors.push(e.message));
 const shots = [];
 
 async function boot() {
+  if (process.env.CAP_SKETCH) await page.addInitScript(() => { window.__sketch = true; });
   await page.goto('http://127.0.0.1:5196/', { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => !!window.stickfight);
-  await page.evaluate(() => { const a = window.stickfight; a.settings.cameraMode = 'third'; a.settings.mode = 'range'; });
+  await page.evaluate(() => { const a = window.stickfight; a.settings.cameraMode = 'third'; a.settings.mode = 'range'; a.settings.sketchSlide = !!window.__sketch; });
   await page.getByRole('button', { name: 'PLAY', exact: true }).click();
   await page.waitForFunction(() => window.stickfight.state === 'playing');
   await page.evaluate(() => {
@@ -60,11 +62,14 @@ async function boot() {
   });
 }
 
+const label0 = (name, v) => `${name}-${typeof v === 'string' ? v : 'custom'}`;
 async function snap(name, views = ['tp']) {
   for (const v of views) {
     const view = typeof v === 'string' ? VIEWS[v] : v;
     await page.evaluate((ins) => window.cap.inspect(ins), view.ins);
-    const buf = await page.screenshot();
+    const t0 = Date.now();
+    const buf = await page.screenshot({ timeout: 120000 });
+    if (Date.now() - t0 > 5000) console.log('slow screenshot', label0(name, v), Date.now() - t0, 'ms');
     const label = `${name}${views.length > 1 || v !== 'tp' ? '-' + (typeof v === 'string' ? v : 'custom') : ''}`;
     await writeFile(`${OUT}/${label}.png`, buf);
     shots.push({ label, buf });
@@ -219,6 +224,15 @@ const scenes = {
     await page.evaluate(() => { cap.look(cap.me().yaw, -1.3); cap.step(0.4); });
     await snap('close-pitch-down', ['close', 'side']);
     await page.evaluate(() => { cap.look(cap.me().yaw, 0); cap.step(0.3); });
+  },
+  async sketch() {
+    // experimental Sketch Slide: paint a lane with the Inkblaster, slide down it
+    await page.evaluate(() => { cap.place(-12, 10, 0); cap.keys([]); cap.slot(0); cap.step(0.5); for (let k = 0; k < 14; k++) { cap.look(0, -0.28 + k * 0.01); cap.keys(['Mouse0']); cap.step(0.12); cap.keys([]); cap.step(0.03); } cap.look(0, 0); cap.tap('KeyR'); cap.step(2.2); });
+    console.log('sketch state', JSON.stringify(await page.evaluate(() => ({ opt: window.stickfight.settings.sketchSlide, cells: window.stickfight.adapter.paint()?.cells.size, pos: cap.me().pos, shots: cap.me().stats.shots }))));
+    await snap('sketch-paint', ['tp', 'high']);
+    await page.evaluate(() => { document.querySelectorAll('.note').forEach((e) => (e.style.display = 'none')); cap.place(-12, 10, 0); cap.keys(['KeyW']); cap.step(0.5); cap.keys(['KeyW', 'ShiftLeft']); cap.step(0.25); });
+    await snap('sketch-slide', ['tp', 'side']);
+    await page.evaluate(() => { cap.keys([]); cap.step(0.6); });
   },
   async debug() {
     await page.evaluate(() => { const fl = window.stickfight.renderer.characters.debug.flags; fl.authSkeleton = fl.renderSkeleton = fl.footTargets = fl.handTargets = true; cap.keys(['KeyW', 'KeyD']); cap.step(0.7); });

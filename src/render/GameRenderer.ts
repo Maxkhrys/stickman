@@ -12,6 +12,9 @@ import { Effects } from './Effects';
 import { HitboxDebug } from './HitboxDebug';
 import { buildMapMesh } from './mapMesh';
 import { Viewmodel, adsEase } from './Viewmodel';
+import { PaintLayer } from './PaintLayer';
+import type { PaintGrid } from '../sim/paint';
+import { TICK_RATE } from '../sim/match';
 
 class Spring {
   x = 0;
@@ -47,6 +50,8 @@ export interface FrameInput {
   objective?: ObjectiveInfo | null;
   thirdPerson?: boolean;
   shoulder?: -1 | 1;
+  /** Sketch Slide paint (experimental) */
+  paint?: PaintGrid | null;
   /** death cam target (killer position) */
   deathLook?: { x: number; y: number; z: number } | null;
 }
@@ -78,6 +83,7 @@ export class GameRenderer {
   readonly viewmodel = new Viewmodel();
   readonly characters: CharacterRenderer;
   readonly hitboxes = new HitboxDebug();
+  readonly paint = new PaintLayer();
   private mapGroup: THREE.Group | null = null;
   private world: World | null = null;
 
@@ -103,7 +109,7 @@ export class GameRenderer {
   private hitStopT = 0;
   thirdPersonActive = false;
   /** debug orbit camera around the local fighter (yaw relative to the fighter's aim) */
-  inspect: { yaw: number; pitch: number; dist: number; height: number } | null = null;
+  inspect: { yaw: number; pitch: number; dist: number; height: number; world?: boolean } | null = null;
   private shoulderOffset = 0.92;
   private tp = { id: -1, y: 0, v: 0, frac: 1, fracV: 0 };
   private tpFwd = new THREE.Vector3();
@@ -127,7 +133,7 @@ export class GameRenderer {
     sun.position.set(0.4, 1, 0.25);
     this.scene.add(sun);
     this.characters = new CharacterRenderer(this.effects);
-    this.scene.add(this.characters.group, this.effects.group, this.hitboxes.group, this.objective.group);
+    this.scene.add(this.characters.group, this.effects.group, this.hitboxes.group, this.objective.group, this.paint.mesh);
     this.resize();
   }
 
@@ -163,6 +169,7 @@ export class GameRenderer {
     }
     this.characters.reset();
     this.effects.clear();
+    this.paint.reset();
     this.world = world;
     this.mapGroup = buildMapMesh(map);
     this.scene.add(this.mapGroup);
@@ -335,7 +342,7 @@ export class GameRenderer {
 
       if (this.inspect) {
         const ins = this.inspect;
-        const yy = fi.viewYaw + ins.yaw;
+        const yy = ins.world ? ins.yaw : fi.viewYaw + ins.yaw;
         const cx = px, cyy = py + ins.height, cz = pz;
         this.camera.position.set(cx - Math.sin(yy) * Math.cos(ins.pitch) * -ins.dist, cyy + Math.sin(ins.pitch) * ins.dist, cz - Math.cos(yy) * Math.cos(ins.pitch) * -ins.dist);
         this.camera.lookAt(cx, cyy, cz);
@@ -399,6 +406,7 @@ export class GameRenderer {
     // ---------------- world ----------------
     this.characters.update(worldDt, fi.fighters, a, renderTime, fi.orbit || this.thirdPersonActive ? -1 : fi.spectateId, world, this.camera);
     this.hitboxes.update(fi.fighters, this.thirdPersonActive ? -1 : fi.spectateId);
+    this.paint.update(fi.orbit ? null : fi.paint ?? null, fi.fighters, Math.round(fi.time * TICK_RATE), TICK_RATE);
     this.effects.camPos.copy(this.camera.position);
     this.effects.setWorld(world);
     this.effects.update(worldDt);

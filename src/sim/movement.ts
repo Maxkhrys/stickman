@@ -4,6 +4,7 @@ import type { Fighter } from './fighter';
 import { BTN, type GameEvent, type InputCommand } from './types';
 import { angleDiff, clamp, lerp, yawTo } from './vec';
 import { strideLength } from './body';
+import { PAINT } from './paint';
 import type { World } from './world';
 import type { Box } from './map';
 
@@ -144,6 +145,7 @@ function moveVertical(f: Fighter, world: World, dt: number, events: GameEvent[],
 export function simulateMovement(f: Fighter, cmd: InputCommand, dt: number, world: World, events: GameEvent[], time = 0) {
   const held = cmd.buttons;
   const pressed = held & ~f.prevButtons;
+  const x0 = f.pos.x, z0 = f.pos.z;
   f.yaw = cmd.yaw;
   f.pitch = clamp(cmd.pitch, -1.55, 1.55);
 
@@ -208,7 +210,8 @@ export function simulateMovement(f: Fighter, cmd: InputCommand, dt: number, worl
 
   if (f.onGround && !jumped) {
     if (f.sliding) {
-      friction(f, MOVE.slideFriction, dt);
+      // Sketch Slide (opt-in): only friction changes; start impulse, steer and cooldown are untouched
+      friction(f, MOVE.slideFriction * (f.sketchSlide ? PAINT.frictionMult : 1), dt);
       accelerate(f, wx, wz, MOVE.crouchSpeed, MOVE.slideSteer, dt);
       f.slideTimer -= dt;
       if (f.slideTimer <= 0 || Math.hypot(f.vel.x, f.vel.z) < MOVE.crouchSpeed + 0.4) f.sliding = false;
@@ -234,18 +237,20 @@ export function simulateMovement(f: Fighter, cmd: InputCommand, dt: number, worl
   f.pos.x = clamp(f.pos.x, bd.minX + MOVE.radius, bd.maxX - MOVE.radius);
   f.pos.z = clamp(f.pos.z, bd.minZ + MOVE.radius, bd.maxZ - MOVE.radius);
 
+  // collision-resolved travel drives the gait: walls stop the run cycle, teleports never count
+  const moved = Math.hypot(f.pos.x - x0, f.pos.z - z0);
+  f.travelSpeed = dt > 0 && moved / dt < MAX_TRAVEL_SPEED ? moved / dt : 0;
+  const gaitBefore = f.gait;
   updateBodyFacing(f, dt);
 
-  // footsteps
-  if (f.onGround && !f.sliding) {
-    const hs = Math.hypot(f.vel.x, f.vel.z);
-    f.stepAccum += hs * dt;
-    if (f.stepAccum > (f.crouching ? 1.6 : 2.3)) {
-      f.stepAccum = 0;
-      if (!f.crouching && hs > 3) events.push({ type: 'step', id: f.id });
-    }
+  // footsteps land on the gait's foot contacts (phase 0 and pi), so sound and feet share one schedule
+  if (f.onGround && !f.sliding && Math.floor(f.gait / Math.PI) !== Math.floor(gaitBefore / Math.PI) && !f.crouching && f.travelSpeed > 3) {
+    events.push({ type: 'step', id: f.id });
   }
 }
+
+/** Faster than any movement the sim can produce (slide boosts, bhop) -> a correction, not travel. */
+const MAX_TRAVEL_SPEED = 30;
 
 const DEG = Math.PI / 180;
 
@@ -254,15 +259,19 @@ const DEG = Math.PI / 180;
  * distance travelled so feet stay planted. Deterministic -> hitboxes and animation agree everywhere.
  */
 function updateBodyFacing(f: Fighter, dt: number) {
-  const hs = Math.hypot(f.vel.x, f.vel.z);
+  const hs = f.travelSpeed;
   let target = f.yaw;
   if (hs > 1 && f.onGround && !f.sliding) {
     const moveYaw = yawTo(f.vel.x, f.vel.z);
     let rel = angleDiff(moveYaw, f.yaw);
-    // running backwards: hips face the aim, legs run in reverse
-    if (Math.abs(rel) > 110 * DEG) rel = angleDiff(moveYaw + Math.PI, f.yaw);
+    // running backwards: hips face the aim, legs run in reverse. Enter past 115 degrees, leave below
+    // 100, so strafing near the boundary keeps one gait instead of alternating between two
+    const a = Math.abs(rel);
+    if (a > BACKPEDAL_IN) f.backpedal = true;
+    else if (a < BACKPEDAL_OUT) f.backpedal = false;
+    if (f.backpedal) rel = angleDiff(moveYaw + Math.PI, f.yaw);
     target = f.yaw + clamp(rel, -70 * DEG, 70 * DEG);
-  }
+  } else if (hs < 0.5) f.backpedal = false;
   const d = angleDiff(target, f.lowerYaw);
   const maxTurn = 12 * dt;
   f.lowerYaw += clamp(d, -maxTurn, maxTurn);
@@ -273,3 +282,6 @@ function updateBodyFacing(f: Fighter, dt: number) {
     f.gait = (f.gait + ((hs * dt) / strideLength(hs)) * Math.PI * 2) % (Math.PI * 2);
   }
 }
+
+export const BACKPEDAL_IN = 115 * DEG;
+export const BACKPEDAL_OUT = 100 * DEG;

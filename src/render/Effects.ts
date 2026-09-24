@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { makeFlashTexture, makeSplatTexture } from './textures';
 import { SAND, sandGrainMap } from './sand';
+import { markerSmearMap } from './marker';
 import type { World } from '../sim/world';
 
 const MAX_PARTICLES = 600;
@@ -8,6 +9,11 @@ const MAX_TRACERS = 32;
 const MAX_HOLES = 96;
 const MAX_SPLATS = 64;
 const MAX_PILES = 12;
+/** marker skid smears (hard stops, slides, heavy landings): one instanced draw, bounded pool */
+const MAX_SMEARS = 16;
+const SMEAR_LIFE = 0.9;
+const PAPER = new THREE.Color(0xf3efe6);
+const SMEAR_INK = new THREE.Color(0x24242c);
 
 interface Pile { alive: boolean; x: number; y: number; z: number; r: number; age: number; life: number; rot: number }
 
@@ -59,6 +65,10 @@ export class Effects {
   private stealIdx = 0;
   setWorld(world: World) { this.world = world; }
 
+  private smears: THREE.InstancedMesh;
+  private smearState = Array.from({ length: MAX_SMEARS }, () => ({ age: 99, x: 0, y: 0, z: 0, rot: 0, len: 1, w: 0.3 }));
+  private smearIdx = 0;
+
   constructor() {
     const pg = new THREE.IcosahedronGeometry(1, 0);
     this.pMesh = new THREE.InstancedMesh(pg, new THREE.MeshBasicMaterial({ color: 0xffffff }), MAX_PARTICLES);
@@ -72,6 +82,15 @@ export class Effects {
       this.pMesh.setColorAt(i, this.color.set(0xffffff));
     }
     this.group.add(this.pMesh);
+    this.smears = new THREE.InstancedMesh(
+      new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ map: markerSmearMap(), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }),
+      MAX_SMEARS,
+    );
+    this.smears.frustumCulled = false;
+    this.smears.count = 0;
+    this.smears.setColorAt(0, SMEAR_INK);
+    this.group.add(this.smears);
 
     // settled sand mounds left by collapsed fighters (fixed pool, recycled oldest-first)
     const mound = new THREE.SphereGeometry(1, 14, 6, 0, Math.PI * 2, 0, Math.PI / 2);
@@ -132,7 +151,35 @@ export class Effects {
     }
   }
 
+  /** A short dry-marker skid on the floor along the travel direction; dries into the paper. */
+  markerSmear(x: number, y: number, z: number, dirX: number, dirZ: number, length: number, width = 0.28) {
+    const s = this.smearState[this.smearIdx];
+    this.smearIdx = (this.smearIdx + 1) % MAX_SMEARS;
+    Object.assign(s, { age: 0, x, y: y + 0.006, z, rot: Math.atan2(-dirZ, dirX), len: Math.max(0.3, Math.min(2.2, length)), w: width });
+  }
+
+  private writeSmears(dt: number) {
+    let n = 0;
+    for (const s of this.smearState) {
+      if (s.age >= SMEAR_LIFE) continue;
+      s.age += dt;
+      const u = Math.min(1, s.age / SMEAR_LIFE);
+      dummy.position.set(s.x, s.y, s.z);
+      dummy.rotation.set(0, s.rot, 0);
+      dummy.scale.set(s.len, 1, s.w * (1 - 0.35 * u));
+      dummy.updateMatrix();
+      this.smears.setMatrixAt(n, dummy.matrix);
+      this.smears.setColorAt(n, this.color.copy(SMEAR_INK).lerp(PAPER, u * u));
+      n++;
+    }
+    this.smears.count = n;
+    this.smears.instanceMatrix.needsUpdate = true;
+    if (this.smears.instanceColor) this.smears.instanceColor.needsUpdate = true;
+  }
+
   clear() {
+    for (const s of this.smearState) s.age = 99;
+    this.smears.count = 0;
     for (const p of this.particles) p.alive = false;
     for (const p of this.piles) p.alive = false;
     this.writePiles();
@@ -299,6 +346,7 @@ export class Effects {
   readonly camPos = new THREE.Vector3();
 
   update(dt: number) {
+    this.writeSmears(dt);
     let anyPile = false;
     for (const p of this.piles) if (p.alive) { p.age += dt; if (p.age >= p.life) p.alive = false; anyPile = true; }
     if (anyPile) this.writePiles();

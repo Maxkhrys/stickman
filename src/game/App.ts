@@ -139,6 +139,7 @@ export class App {
       playerColor: this.profile.color,
       timeLimit: 6 * 60,
       scoreLimit: s.mode === 'sketch' ? 60 : 25,
+      sketchSlide: s.sketchSlide,
     });
     this.matchId = crypto.randomUUID();
     this.weaponKills = {}; this.headshotKills = 0;
@@ -472,6 +473,7 @@ export class App {
       thirdPerson: this.settings.cameraMode === 'third',
       shoulder: this.settings.shoulder,
       objective: info.objective,
+      paint: this.adapter.paint(),
       deathLook: me && !me.alive ? this.fighter(this.lastKillerId)?.pos ?? null : null,
     });
     if (this.awaitFrame > 0) {
@@ -502,6 +504,7 @@ export class App {
       this.hud.aimPoint(this.renderer.project(tv.set(point.x, point.y, point.z)), trace.obstructed);
     } else this.hud.aimPoint(null);
     this.hud.objective(info, me);
+    this.hud.sketchSlide(me.alive && me.sketchSlide);
     this.hud.scoreboard(this.showBoard && this.state === 'playing', this.adapter.fighters(), this.adapter.localId, info);
     this.hud.updateTags(performance.now() / 1000, this.adapter.fighters(), (id) => {
       const h = this.renderer.characters.headOf(id);

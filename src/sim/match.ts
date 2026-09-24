@@ -1,3 +1,4 @@
+import { PAINT, PaintGrid } from './paint';
 import { DIFFICULTY, type DifficultyDef } from '../config/difficulty';
 import { MOVE } from '../config/movement';
 import { RANGE_LOADOUT, WEAPONS, matchLoadout, type PrimaryId } from '../config/weapons';
@@ -24,6 +25,8 @@ export interface MatchOptions {
   mapId?: 'arena' | 'bookyard';
   playerColor?: number;
   seed?: number;
+  /** EXPERIMENTAL Sketch Slide: Inkblaster floor hits leave slide paint (off by default) */
+  sketchSlide?: boolean;
 }
 
 export interface ObjectiveInfo {
@@ -63,6 +66,8 @@ export class Match implements SimContext {
   readonly diff: DifficultyDef;
   time = 0;
   tick = 0;
+  /** Sketch Slide paint cells (empty unless the option is on) */
+  readonly paint: PaintGrid;
   timeLeft: number;
   ended = false;
   private objectiveClock = 0;
@@ -79,6 +84,7 @@ export class Match implements SimContext {
   constructor(readonly opts: MatchOptions) {
     this.map = opts.mode === 'range' ? MAPS.range : MAPS[opts.mapId ?? 'arena'];
     this.world = new World(this.map);
+    this.paint = new PaintGrid(this.world, TICK_RATE);
     this.nav = new NavGraph(this.world, 2);
     this.rng = mulberry32(opts.seed ?? (Math.random() * 1e9) | 0);
     this.timeLeft = opts.mode === 'range' ? Infinity : opts.timeLimit;
@@ -243,6 +249,10 @@ export class Match implements SimContext {
     f.lowerYaw = f.prevLowerYaw = yaw;
     f.pitch = f.prevPitch = 0;
     f.gait = f.prevGait = 0;
+    f.backpedal = false;
+    f.travelSpeed = 0;
+    f.sketchSlide = false;
+    f.sketchGrace = 0;
     f.hp = f.maxHp;
     f.alive = true;
     f.onGround = true;
@@ -320,8 +330,18 @@ export class Match implements SimContext {
       else if (f.kind === 'bot') cmd = this.brains.get(f.id)!.think(this, dt);
       else cmd = this.dummyCommand(f, dt);
 
+      if (this.opts.sketchSlide) this.sketchEligibility(f, dt);
       simulateMovement(f, cmd, dt, this.world, this.events, this.time);
+      if (!f.onGround || !f.sliding) { f.sketchSlide = false; f.sketchGrace = 0; } // left the ground / slide this tick
+      const shotsFrom = this.events.length;
       updateWeapon(this, f, cmd, dt, wopts);
+      if (this.opts.sketchSlide) {
+        // only the Inkblaster paints, at its authoritative world impact (never behind a fighter it hit)
+        for (let i = shotsFrom; i < this.events.length; i++) {
+          const e = this.events[i];
+          if (e.type === 'shot' && e.id === f.id && e.weapon === 'ar' && e.hitWorld) this.paint.paint(e.to, e.normal, f.id, this.tick);
+        }
+      }
       f.prevButtons = cmd.buttons;
       if (f.spawnProtect > 0) {
         f.spawnProtect = Math.max(0, f.spawnProtect - dt);
@@ -336,6 +356,7 @@ export class Match implements SimContext {
     }
 
     this.stepObjective(dt);
+    if (this.opts.sketchSlide) this.paint.expire(this.tick);
 
     // hearing: bots react to gunfire & footsteps
     for (let i = this.eventCursor; i < this.events.length; i++) {
@@ -355,6 +376,17 @@ export class Match implements SimContext {
         this.endMatch();
       }
     }
+  }
+
+  /**
+   * Sketch Slide eligibility, before movement: already sliding, grounded and over your own usable paint.
+   * A short grace bridges cell edges; leaving the ground or the slide clears it at once.
+   */
+  private sketchEligibility(f: Fighter, dt: number) {
+    if (!f.sliding || !f.onGround) f.sketchGrace = 0;
+    else if (this.paint.ownerAt(f.pos.x, f.pos.y, f.pos.z, this.tick) === f.id) f.sketchGrace = PAINT.grace;
+    else f.sketchGrace = Math.max(0, f.sketchGrace - dt);
+    f.sketchSlide = f.sliding && f.onGround && f.sketchGrace > 0;
   }
 
   botState(id: number): string | undefined {

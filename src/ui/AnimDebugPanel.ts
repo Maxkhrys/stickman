@@ -54,6 +54,10 @@ export class AnimDebugPanel {
     this.el.innerHTML =
       `<b>ANIM</b> ${anim?.state ?? '-'} · ${hs.toFixed(1)} m/s${me ? ` · gait ${me.gait.toFixed(2)}` : ''}<br>` +
       `feet L/R ${feet}<br>` +
+      (anim ? `travel ${anim.diag.travel.toFixed(1)} m/s · cadence ${anim.diag.cadence}/s · plant err ${(anim.plantError * 100).toFixed(1)} cm<br>` +
+        `pelvis↔aim ${(anim.diag.twist * 57.3).toFixed(0)}° · drawn↔hitbox skeleton ${(anim.diag.jointDev * 100).toFixed(1)} cm (${anim.diag.jointDevName})<br>` +
+        `torso: hit OBB 42 cm wide, drawn spine 10 cm (known mismatch)<br>` : '') +
+      (me ? `sketch slide ${me.sketchSlide ? '<b>ACTIVE</b>' : 'off'} · grace ${(me.sketchGrace * 1000).toFixed(0)} ms<br>` : '') +
       `F6 skeleton ${['off', 'auth', 'render', 'both'][this.skel]} · F7 targets ${on(f.footTargets)}<br>` +
       `F8 freeze ${on(f.freeze)} · F9 speed ×${SPEEDS[this.speed]}<br>` +
       `F10 orbit ${['off', 'front', 'side', 'rear', '¾'][this.orbit]} · F11 body ${on(!f.hideBody)} · F12 hitboxes ${on(this.hitboxes)}`;

@@ -28,6 +28,8 @@ export interface Settings {
   showFps: boolean;
   damageNumbers: boolean;
   showHitboxes: boolean;
+  /** EXPERIMENTAL: Sketch Slide paint-and-slide rules for range and bot matches */
+  sketchSlide: boolean;
   renderScale: number;
   playerName: string;
   difficulty: Difficulty;
@@ -54,6 +56,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showFps: true,
   damageNumbers: true,
   showHitboxes: false,
+  sketchSlide: false,
   renderScale: 1,
   playerName: 'You',
   difficulty: 'easy',
@@ -84,6 +87,7 @@ function sanitize(p: Partial<Settings> & { volume?: number; cameraBob?: number }
   if (s.cameraMode !== 'third') s.cameraMode = 'first';
   if (s.mapId !== 'bookyard') s.mapId = 'arena';
   s.shoulder = s.shoulder === -1 ? -1 : 1;
+  s.sketchSlide = s.sketchSlide === true;
   s.botCount = Math.max(1, Math.min(8, Math.round(s.botCount || 6)));
   s.fov = Math.max(70, Math.min(120, s.fov));
   delete (s as unknown as Record<string, unknown>).volume;

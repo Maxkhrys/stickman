@@ -40,6 +40,10 @@ export class LocalAdapter implements NetworkAdapter {
     return this.m.world;
   }
 
+  paint() {
+    return this.match?.paint ?? null;
+  }
+
   drainEvents(): GameEvent[] {
     return this.m.drainEvents();
   }

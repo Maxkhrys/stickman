@@ -15,26 +15,14 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Capture reproducible debugging workspace
-        if: github.head_ref == 'fix/aim-shot-alignment-v3'
-        run: |
-          git archive --format=tar.gz HEAD > /tmp/stickfight-source.tgz
-          tar -czf /tmp/stickfight-deps.tgz node_modules
-      - uses: actions/upload-artifact@v4
-        if: github.head_ref == 'fix/aim-shot-alignment-v3'
-        with:
-          name: stickfight-debug-workspace
-          retention-days: 1
-          path: |
-            /tmp/stickfight-source.tgz
-            /tmp/stickfight-deps.tgz
-      - run: npm test && npm run test:upgrade && npm run test:motion && npm run test:sketch && npm run build
+      - run: npm test && npm run test:upgrade && npm run test:motion && npm run test:sketch && npm run test:aim && npm run build
       - run: npx playwright install --with-deps chromium
       - name: Browser flow and screenshots
         run: |
           npm run dev -- --host 127.0.0.1 --port 5178 > /tmp/vite.log 2>&1 &
           for i in $(seq 1 40); do curl -fsS http://127.0.0.1:5178/ >/dev/null && break; sleep 1; done
           xvfb-run -a node tests/browser.mjs
+          node tests/aim.browser.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

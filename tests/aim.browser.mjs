@@ -27,6 +27,7 @@ try {
     const { forwardFromAngles, vaddScaled } = await import('/src/sim/vec.ts');
     const { traceFireLine, traceShot } = await import('/src/sim/combat.ts');
     const { eyePos } = await import('/src/sim/fighter.ts');
+    const THREE = await import('/node_modules/three/build/three.module.js');
     const results = [];
     for (const shoulder of [-1, 1]) {
       a.settings.shoulder = shoulder;
@@ -39,7 +40,8 @@ try {
       const dir = forwardFromAngles(cmd.yaw, cmd.pitch);
       const t = (desired.z - eyePos(f).z) / dir.z;
       const point = vaddScaled(eyePos(f), dir, t);
-      const px = r.project(point);
+      const px = r.project(new THREE.Vector3(point.x, point.y, point.z));
+      if (!px) throw Error('converged aim point is behind camera');
       results.push({ shoulder, error: Math.hypot(px.x - innerWidth / 2, px.y - innerHeight / 2), raw: raw.yaw === a.input.yaw && raw.pitch === a.input.pitch });
       // Sweep live fighters across the aim ray. The HUD and raw mouse never chase them.
       const target = a.adapter.fighters()[1];
@@ -51,6 +53,7 @@ try {
     }
     return results;
   });
+  await writeFile('verification/aim/geometry.json', JSON.stringify(geometry, null, 2));
   check('Centred reticle and hitmarker stay fixed as enemies cross both shoulders', geometry.every(x => x.raw));
   check('Eye convergence matches screen centre within one pixel', geometry.every(x => x.error < 1));
   const effects = await page.evaluate(async () => {
@@ -85,6 +88,7 @@ try {
     const clears = e.flashes.every(f => !f.s.visible && !f.follow);
     return { shortVisible, noOvershoot, recycle, hitStop, follows, expires, clears };
   });
+  await writeFile('verification/aim/effects.json', JSON.stringify(effects, null, 2));
   for (const [key, value] of Object.entries(effects)) check(`Effects regression: ${key}`, value);
   const sockets = await page.evaluate(async () => {
     const a = window.stickfight, r = a.renderer, f = a.adapter.fighters()[0];
@@ -113,6 +117,7 @@ try {
     f.alive = true; f.cur = 0; a.settings.cameraMode = 'third';
     return { attached, copied, fpAttached, clears };
   });
+  await writeFile('verification/aim/sockets.json', JSON.stringify(sockets, null, 2));
   for (const [key, value] of Object.entries(sockets)) check(`Shot socket regression: ${key}`, value);
   await page.evaluate(async () => {
     const a = window.stickfight, f = a.adapter.fighters()[0]; a.settings.shoulder = 1;

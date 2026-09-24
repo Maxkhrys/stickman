@@ -102,7 +102,11 @@ export class GameRenderer {
   fovKickOn = true;
   private hitStopT = 0;
   thirdPersonActive = false;
-  private shoulderOffset = 0.8;
+  /** debug orbit camera around the local fighter (yaw relative to the fighter's aim) */
+  inspect: { yaw: number; pitch: number; dist: number; height: number } | null = null;
+  private shoulderOffset = 0.92;
+  private tp = { id: -1, y: 0, v: 0, frac: 1, fracV: 0 };
+  private tpFwd = new THREE.Vector3();
   private rings: THREE.Object3D[] = [];
   readonly zoom: ZoomInfo = { vfov: 1, baseVfov: 1, adsE: 0, scopeCover: 0, eyepiece: null };
   /** live scope image for the sniper eyepiece while it approaches the eye */
@@ -288,21 +292,54 @@ export class GameRenderer {
       // projects its actual impact, so shoulder peeking never creates a camera-origin shot.
       this.thirdPersonActive = !!fi.thirdPerson && me.alive && !(def.scope && ads > 0.05);
       if (this.thirdPersonActive) {
-        const side = (fi.shoulder ?? 1) * (0.8 - adsE * 0.35);
-        this.shoulderOffset += (side - this.shoulderOffset) * (1 - Math.exp(-16 * dt));
-        const back = 3.25 - adsE * 1.6;
-        const pivot = { x: px, y: py + this.eyeH, z: pz };
-        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
-        const desired = {
-          x: pivot.x - forward.x * back + cy * this.shoulderOffset,
-          y: pivot.y - forward.y * back + 0.22,
-          z: pivot.z - forward.z * back - sy * this.shoulderOffset,
-        };
-        const safe = clipCamera(world, pivot, desired);
-        this.camera.position.set(safe.x, safe.y, safe.z);
+        // Over-the-shoulder framing: the fighter sits left (or right) of the reticle, tighter when
+        // aiming, opened up a little at a sprint or slide. Rotation is the raw aim (no latency);
+        // only the pivot's vertical motion and the collision pull-in are smoothed.
+        const tp = this.tp;
+        const runOpen = Math.max(0, Math.min(1, (hs - MOVE.maxSpeed * 0.7) / (MOVE.maxSpeed * 0.5))) * (1 - adsE);
+        const side = (fi.shoulder ?? 1) * (0.92 - adsE * 0.3 - runOpen * 0.06);
+        this.shoulderOffset += (side - this.shoulderOffset) * (1 - Math.exp(-14 * dt));
+        const back = 2.75 - adsE * 1.15 + runOpen * 0.35 + (me.sliding ? 0.25 : 0);
+        const lift = 0.2 - adsE * 0.1;
+        // vertical pivot: velocity-compensated critically damped follow -> no steady lag, but jump
+        // take-offs, landings and step-ups are eased instead of jerked
+        const pivotY = py + this.eyeH + this.stepOff * 0.6;
+        if (tp.id !== me.id || Math.abs(tp.y - pivotY) > 1.5) { tp.id = me.id; tp.y = pivotY; tp.v = me.vel.y; tp.frac = 1; tp.fracV = 0; }
+        {
+          const w = 16, target = pivotY + me.vel.y * (2 / w) * 0.85;
+          const x = w * dt, e = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x);
+          const ch = tp.y - target, tmp = (tp.v + w * ch) * dt;
+          tp.v = (tp.v - w * tmp) * e;
+          tp.y = target + (ch + tmp) * e;
+        }
+        const pyS = Math.max(pivotY - 0.35, Math.min(pivotY + 0.35, tp.y)) + this.dip.x * 0.22 * ms;
+        const pivot = { x: px, y: pyS, z: pz };
+        const forward = this.tpFwd.set(0, 0, -1).applyQuaternion(this.camera.quaternion);
+        const ox = -forward.x * back + cy * this.shoulderOffset, oy = -forward.y * back + lift, oz = -forward.z * back - sy * this.shoulderOffset;
+        const safe = clipCamera(world, pivot, { x: pivot.x + ox, y: pivot.y + oy, z: pivot.z + oz });
+        const len = Math.hypot(ox, oy, oz) || 1;
+        const frac = Math.hypot(safe.x - pivot.x, safe.y - pivot.y, safe.z - pivot.z) / len;
+        // collision: pull in instantly, ease back out once the wall is gone
+        if (frac < tp.frac) { tp.frac = frac; tp.fracV = 0; }
+        else {
+          const w = 7, x = w * dt, e = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x);
+          const ch = tp.frac - frac, tmp = (tp.fracV + w * ch) * dt;
+          tp.fracV = (tp.fracV - w * tmp) * e;
+          tp.frac = Math.min(frac, frac + (ch + tmp) * e);
+        }
+        this.camera.position.set(pivot.x + ox * tp.frac, pivot.y + oy * tp.frac, pivot.z + oz * tp.frac);
         // Hide the local body only if collision pulled the camera into it (3D, so looking straight
         // up or down keeps the over-the-shoulder view instead of dropping to first person).
-        if (Math.hypot(safe.x - pivot.x, safe.y - pivot.y, safe.z - pivot.z) < 0.55) { this.thirdPersonActive = false; this.camera.position.set(px + bobX * cy, camY, pz - bobX * sy); }
+        if (len * tp.frac < 0.55) { this.thirdPersonActive = false; this.camera.position.set(px + bobX * cy, camY, pz - bobX * sy); }
+      }
+
+      if (this.inspect) {
+        const ins = this.inspect;
+        const yy = fi.viewYaw + ins.yaw;
+        const cx = px, cyy = py + ins.height, cz = pz;
+        this.camera.position.set(cx - Math.sin(yy) * Math.cos(ins.pitch) * -ins.dist, cyy + Math.sin(ins.pitch) * ins.dist, cz - Math.cos(yy) * Math.cos(ins.pitch) * -ins.dist);
+        this.camera.lookAt(cx, cyy, cz);
+        this.thirdPersonActive = true;
       }
 
       // ---- FOV: speed kick at hip, iron-sight zoom, scope zoom synced with the overlay ----

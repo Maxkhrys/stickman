@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { makeFlashTexture, makeSplatTexture } from './textures';
+import { makeDashTexture, makeFlashTexture, makeSplatTexture } from './textures';
 import { SAND, sandGrainMap } from './sand';
 import { markerSmearMap } from './marker';
 import type { World } from '../sim/world';
@@ -105,10 +105,11 @@ export class Effects {
     }
     this.group.add(this.pileMesh);
 
-    const tg = new THREE.BoxGeometry(1, 1, 1);
-    tg.translate(0, 0, 0.5);
+    // drawn tracer: two crossed tapered strips (tail thin -> head full), dashed pen-line alpha
+    const tg = tracerStrokeGeometry();
+    const dash = makeDashTexture();
     for (let i = 0; i < MAX_TRACERS; i++) {
-      const m = new THREE.Mesh(tg, new THREE.MeshBasicMaterial({ color: 0xffe9a0, transparent: true, depthWrite: false }));
+      const m = new THREE.Mesh(tg, new THREE.MeshBasicMaterial({ color: 0xffe9a0, transparent: true, depthWrite: false, side: THREE.DoubleSide, alphaMap: dash.clone() }));
       m.visible = false;
       m.frustumCulled = false;
       this.tracers.push({ mesh: m, from: new THREE.Vector3(), dir: new THREE.Vector3(), total: 0, head: 0, speed: 300, len: 3, thick: 0.02, active: false });
@@ -215,7 +216,11 @@ export class Effects {
     t.active = true;
     t.mesh.scale.set(thick, thick, 0.001);
     (t.mesh.material as THREE.MeshBasicMaterial).color.set(color);
-    (t.mesh.material as THREE.MeshBasicMaterial).opacity = 0.9;
+    const mat = t.mesh.material as THREE.MeshBasicMaterial;
+    mat.opacity = 0.95;
+    // per-shot dash phase: slightly different pen line every shot, fixed for its short life
+    mat.alphaMap!.offset.set(0, Math.random());
+    mat.alphaMap!.repeat.set(1, Math.max(1, len / 1.1));
     t.mesh.visible = false;
   }
 
@@ -336,9 +341,9 @@ export class Effects {
   impact(pos: THREE.Vector3, normal: THREE.Vector3, shotDir?: THREE.Vector3) {
     const refl = new THREE.Vector3().copy(normal);
     if (shotDir) refl.copy(shotDir).addScaledVector(normal, -2 * shotDir.dot(normal)).normalize().lerp(normal, 0.4).normalize();
-    this.burst(pos, 0xffd070, 5, 5, 0.03, 0.2, 1.2, refl);
-    this.burst(pos, 0xe9e3d3, 5, 2.5, 0.05, 0.45, 0.7, refl);
-    this.burst(pos, 0x1b1b24, 2, 1.5, 0.035, 0.3, 1, normal);
+    // drawn impact: a few ink and graphite flecks kicked off the paper, no sparks or smoke
+    this.burst(pos, 0x1b1b24, 5, 3.5, 0.035, 0.28, 1.1, refl);
+    this.burst(pos, 0x5a5a68, 3, 2, 0.03, 0.3, 0.9, refl);
     this.bulletHole(pos, normal);
   }
 
@@ -407,4 +412,24 @@ export class Effects {
       if (f.life <= 0) f.s.visible = false;
     }
   }
+}
+
+/** Tapered crossed strips from z = 0 (tail, 25% width) to z = 1 (head); uv.y runs along the stroke. */
+function tracerStrokeGeometry(): THREE.BufferGeometry {
+  const pos: number[] = [], uv: number[] = [], idx: number[] = [];
+  for (const axis of [0, 1]) {
+    const b = pos.length / 3;
+    for (const [z, w] of [[0, 0.25], [1, 1]]) {
+      for (const s of [-0.5, 0.5]) {
+        pos.push(axis ? 0 : s * w, axis ? s * w : 0, z);
+        uv.push(s + 0.5, z);
+      }
+    }
+    idx.push(b, b + 1, b + 2, b + 1, b + 3, b + 2);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  return g;
 }

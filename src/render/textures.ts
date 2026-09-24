@@ -382,3 +382,25 @@ export function makePencilHatchTexture(): THREE.Texture {
   for (let i = -s; i < s * 2; i += 9) { g.beginPath(); g.moveTo(i, 0); g.lineTo(i + s * 0.6, s); g.stroke(); }
   return canvasTex(c);
 }
+
+/** Pen-line dash alpha along v: uneven dashes with soft ends (tracers). */
+export function makeDashTexture(): THREE.Texture {
+  const W = 8, H = 64;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#000';
+  g.fillRect(0, 0, W, H);
+  let y = 2;
+  while (y < H - 4) {
+    const len = 9 + Math.random() * 12;
+    const grd = g.createLinearGradient(0, y, 0, y + len);
+    grd.addColorStop(0, '#444'); grd.addColorStop(0.2, '#fff'); grd.addColorStop(0.85, '#fff'); grd.addColorStop(1, '#333');
+    g.fillStyle = grd;
+    g.fillRect(1, y, W - 2, Math.min(len, H - y));
+    y += len + 3 + Math.random() * 4;
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
+}

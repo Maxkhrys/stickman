@@ -28,6 +28,15 @@ const tv3 = new THREE.Vector3();
 
 const PART_LABEL: Record<HitPart, string> = { head: 'head', chest: 'upper chest', stomach: 'stomach', limb: 'limb' };
 
+/** Drawn shot strokes per weapon: pen weight, ink, speed and dash length (hitscan: visual only). */
+const TRACER_STYLE: Record<string, { w: number; color: number; enemy: number; speed: number; len: number }> = {
+  ar: { w: 0.022, color: 0x1b1b24, enemy: 0xe8327f, speed: 330, len: 3.2 }, // thin marker streak
+  smg: { w: 0.02, color: 0x2b2d42, enemy: 0xe8327f, speed: 300, len: 1.8 }, // short rough scribble
+  carbine: { w: 0.014, color: 0x14141c, enemy: 0xe8327f, speed: 380, len: 4.2 }, // clean fine-point line
+  sniper: { w: 0.03, color: 0x4a4a58, enemy: 0x4a4a58, speed: 440, len: 6.5 }, // sharp graphite streak
+  pistol: { w: 0.032, color: 0xffc21a, enemy: 0xff4f9a, speed: 280, len: 1.3 }, // highlighter dash
+};
+
 export class App {
   readonly settings: Settings = loadSettings();
   readonly profile = new Profile();
@@ -243,13 +252,13 @@ export class App {
             if (this.latency.sim.length > 30) this.latency.sim.shift();
             this.awaitFrame = press;
           }
-          if (R.zoom.scopeCover < 0.5) R.effects.tracer(tv, tv2, e.weapon === 'sniper' ? 0.03 : 0.022, 0x2b2d42, 1.5 + 2.5 * R.zoom.adsE, e.weapon === 'sniper' ? 420 : 320, e.weapon === 'sniper' ? 6 : 3.2);
+          if (R.zoom.scopeCover < 0.5) { const t = TRACER_STYLE[e.weapon] ?? TRACER_STYLE.ar; R.effects.tracer(tv, tv2, t.w, t.color, 1.5 + 2.5 * R.zoom.adsE, t.speed, t.len); }
         } else {
           const [d, pan] = this.spatial(src.pos);
           this.sfx.shot(e.weapon, d, pan);
           tv.set(e.from.x, e.from.y, e.from.z);
           R.effects.worldFlash(tv, e.weapon === 'sniper' ? 0.8 : 0.5);
-          R.effects.tracer(tv, tv2, e.weapon === 'sniper' ? 0.04 : 0.03, 0x8b5cf6, 0, 260, e.weapon === 'sniper' ? 6 : 3.5);
+          { const t = TRACER_STYLE[e.weapon] ?? TRACER_STYLE.ar; R.effects.tracer(tv, tv2, t.w * 1.3, t.enemy, 0, t.speed * 0.85, t.len); }
         }
         if (e.hitWorld && e.normal) {
           tv.set(e.normal.x, e.normal.y, e.normal.z);
@@ -277,6 +286,8 @@ export class App {
             R.effects.burst(tv, head ? 0xffd23f : ink, head ? 8 : 5, 3.5, 0.05, 0.4, 1, tv2);
             R.effects.burst(tv, 0x1b1b24, 3, 2.5, 0.04, 0.4, 1, tv2);
           }
+          // headshot: a hand-drawn star accent pops at the head
+          if (head) R.effects.worldFlash(tv, 0.38);
           R.characters.hurt(e.victim, e.dir.x, e.dir.z);
         }
         if (e.attacker === local) {
@@ -320,7 +331,7 @@ export class App {
         if (!killer || !victim) break;
         this.hud.killfeed(killer, victim, e.weapon, e.headshot, e.backstab, local);
         const floorY = this.adapter.world().surfaceBelow(victim.pos.x, victim.pos.z, 0.3, victim.pos.y + 0.1);
-        if (!SAND.enabled) R.effects.inkSplat(victim.pos.x + e.dir.x * 0.6, floorY, victim.pos.z + e.dir.z * 0.6, victim.color, e.headshot ? 2.6 : 1.8);
+        R.effects.inkSplat(victim.pos.x + e.dir.x * 0.6, floorY, victim.pos.z + e.dir.z * 0.6, victim.kind === 'dummy' ? 0xff4f9a : victim.color, e.headshot ? 2.6 : 1.8);
         R.characters.kill(victim, e.dir, e.headshot);
         if (SAND.enabled) {
           const [sd, span] = this.spatial(victim.pos);

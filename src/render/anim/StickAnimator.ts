@@ -500,8 +500,11 @@ export class StickAnim {
     const frx = fr.x, frz = fr.z, ffx = -Math.sin(yawP), ffz = -Math.cos(yawP);
     const grounded = v.onGround && !v.sliding;
     const speedN = Math.min(hs / MOVE.maxSpeed, 1.2);
-    const lift = (0.09 + 0.13 * speedN) * (1 - 0.4 * crouch);
     const mx = hs > 0.05 ? v.vel.x / hs : ffx, mz = hs > 0.05 ? v.vel.z / hs : ffz;
+    // direction shaping: backpedal = shorter, lower steps; strafe = narrow track, low lift
+    const backK = hs > 0.3 ? clamp(-(mx * ffx + mz * ffz), 0, 1) : 0;
+    const latK = hs > 0.3 ? Math.abs(mx * frx + mz * frz) : 0;
+    const lift = (0.09 + 0.13 * speedN) * (1 - 0.4 * crouch) * (1 - 0.3 * backK - 0.2 * latK);
     let swinging = 0;
     for (const ft of this.feet) {
       if (ft.mode === FootMode.Swing) swinging++;
@@ -566,8 +569,8 @@ export class StickAnim {
           // predicted touchdown: where the body will be when this foot lands, plus half a stance ahead
           const tRem = inSwing ? ((Math.PI * 2 - ph) / (Math.PI * 2)) * (S / Math.max(hs, 0.5)) : 0;
           const tRemC = Math.min(tRem, 0.6);
-          const wid = 0.075 + 0.05 * crouch;
-          const reach = S * duty * 0.5;
+          const wid = (0.075 + 0.05 * crouch) * (1 - 0.45 * latK);
+          const reach = S * duty * 0.5 * (1 - 0.2 * backK - 0.1 * latK);
           ft.pred.set(
             v.pos.x + v.vel.x * tRemC + mx * reach + frx * s * wid,
             0,

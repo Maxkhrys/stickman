@@ -295,6 +295,7 @@ export class Menus {
     tog('Damage numbers', () => s.damageNumbers, (v) => (s.damageNumbers = v));
     tog('Hit regions', () => s.showHitboxes, (v) => (s.showHitboxes = v));
     tog('Show FPS', () => s.showFps, (v) => (s.showFps = v));
+    tog('Sketch Slide (experimental)', () => s.sketchSlide, (v) => (s.sketchSlide = v));
     card.appendChild(
       this.row('Crosshair', this.seg<string>([['#1b1b24', 'Ink'], ['#ff4f9a', 'Pink'], ['#22c6e0', 'Cyan'], ['#3ddc84', 'Green']], s.crosshairColor, (v) => {
         s.crosshairColor = v;

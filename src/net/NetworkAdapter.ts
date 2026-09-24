@@ -3,6 +3,7 @@ import type { MatchInfo, MatchOptions } from '../sim/match';
 import type { MapDef } from '../sim/map';
 import type { GameEvent, InputCommand } from '../sim/types';
 import type { World } from '../sim/world';
+import type { PaintGrid } from '../sim/paint';
 
 /**
  * The client talks to "the game" only through this interface. Today it's a LocalAdapter that runs the
@@ -23,6 +24,8 @@ export interface NetworkAdapter {
   info(): MatchInfo;
   map(): MapDef;
   world(): World;
+  /** Sketch Slide paint state (read only; null when unavailable) */
+  paint(): PaintGrid | null;
   drainEvents(): GameEvent[];
   stop(): void;
 }

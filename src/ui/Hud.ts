@@ -37,6 +37,7 @@ export class Hud {
   private notice = el('div', 'panel notice');
   private death = el('div', 'death hidden', '<h1>SCRIBBLED OUT</h1><p class="by"></p><p class="cd"></p>');
   private note = el('div', 'note hidden');
+  private sketch = el('div', 'sketch-slide hidden', 'SKETCH SLIDE');
   private stats = el('div', 'panel stats hidden');
   private board = el('div', 'scoreboard hidden');
   private dmgLayer = el('div', '');
@@ -55,7 +56,7 @@ export class Hud {
 
   constructor(parent: HTMLElement) {
     this.root.id = 'hud';
-    for (const e of [this.dmgLayer, this.tagLayer, this.indLayer, this.vignette, this.xh, this.hm, this.hpPanel, this.ammoPanel, this.objectivePanel, this.top, this.fpsEl, this.feed, this.notice, this.note, this.stats, this.death, this.board])
+    for (const e of [this.dmgLayer, this.tagLayer, this.indLayer, this.vignette, this.xh, this.hm, this.hpPanel, this.ammoPanel, this.objectivePanel, this.top, this.fpsEl, this.feed, this.notice, this.note, this.stats, this.death, this.board, this.sketch])
       this.root.appendChild(e);
     parent.appendChild(this.root);
   }
@@ -195,6 +196,12 @@ export class Hud {
     this.note.classList.remove('hidden');
     this.note.style.opacity = '1';
     this.noteTimer = seconds;
+  }
+
+  /** tiny marker tag, only while the experimental Sketch Slide bonus is active */
+  sketchSlide(active: boolean) {
+    if (this.sketch.classList.contains('hidden') === !active) return;
+    this.sketch.classList.toggle('hidden', !active);
   }
 
   setStats(html: string | null) {

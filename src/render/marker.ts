@@ -67,7 +67,6 @@ export function markerStrokeMap(): THREE.CanvasTexture {
   strokeMap = new THREE.CanvasTexture(c);
   strokeMap.wrapS = strokeMap.wrapT = THREE.RepeatWrapping;
   strokeMap.colorSpace = THREE.SRGBColorSpace;
-  strokeMap.anisotropy = 4;
   strokeMap.generateMipmaps = true;
   strokeMap.minFilter = THREE.LinearMipmapLinearFilter;
   return strokeMap;

@@ -53,6 +53,9 @@ export interface Fighter {
   backpedal: boolean;
   /** collision-resolved horizontal travel speed of the last tick (m/s, teleports rejected) */
   travelSpeed: number;
+  /** EXPERIMENTAL Sketch Slide: sliding on own paint this tick (reduced slide friction) */
+  sketchSlide: boolean;
+  sketchGrace: number;
 
   onGround: boolean;
   crouching: boolean;
@@ -134,6 +137,8 @@ export function createFighter(id: number, name: string, color: number, kind: Fig
     prevGait: 0,
     backpedal: false,
     travelSpeed: 0,
+    sketchSlide: false,
+    sketchGrace: 0,
     onGround: true,
     crouching: false,
     sliding: false,

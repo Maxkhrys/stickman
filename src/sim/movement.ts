@@ -4,6 +4,7 @@ import type { Fighter } from './fighter';
 import { BTN, type GameEvent, type InputCommand } from './types';
 import { angleDiff, clamp, lerp, yawTo } from './vec';
 import { strideLength } from './body';
+import { PAINT } from './paint';
 import type { World } from './world';
 import type { Box } from './map';
 
@@ -209,7 +210,8 @@ export function simulateMovement(f: Fighter, cmd: InputCommand, dt: number, worl
 
   if (f.onGround && !jumped) {
     if (f.sliding) {
-      friction(f, MOVE.slideFriction, dt);
+      // Sketch Slide (opt-in): only friction changes; start impulse, steer and cooldown are untouched
+      friction(f, MOVE.slideFriction * (f.sketchSlide ? PAINT.frictionMult : 1), dt);
       accelerate(f, wx, wz, MOVE.crouchSpeed, MOVE.slideSteer, dt);
       f.slideTimer -= dt;
       if (f.slideTimer <= 0 || Math.hypot(f.vel.x, f.vel.z) < MOVE.crouchSpeed + 0.4) f.sliding = false;

@@ -237,3 +237,6 @@ button:focus-visible, input:focus-visible { outline: 3px solid #127b88; outline-
 
 .anim-debug { position: absolute; right: 12px; top: 110px; z-index: 30; padding: 8px 10px; background: rgba(20,20,28,.82); color: #f3efe4; font: 12px/1.5 ui-monospace, monospace; border-radius: 6px; pointer-events: none; max-width: 360px; }
 .anim-debug b { color: #ffd23f; }
+
+/* experimental Sketch Slide: small tag low on the screen, never over the crosshair */
+.sketch-slide { position: absolute; left: 50%; bottom: 118px; transform: translateX(-50%) rotate(-2deg); font-family: var(--hand); font-size: 15px; letter-spacing: 1px; color: var(--ink); background: var(--yellow); border: 2px solid var(--ink); border-radius: 4px 8px 3px 7px; padding: 0 8px; pointer-events: none; }

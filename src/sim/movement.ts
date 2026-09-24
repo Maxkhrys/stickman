@@ -195,7 +195,9 @@ export function simulateMovement(f: Fighter, cmd: InputCommand, dt: number, worl
   }
 
   // ---- wish direction ----
-  const sy = Math.sin(f.yaw), cy = Math.cos(f.yaw);
+  // Third-person convergence must not steer WASD toward whatever is under the reticle.
+  const moveYaw = Number.isFinite(cmd.moveYaw) ? cmd.moveYaw! : f.yaw;
+  const sy = Math.sin(moveYaw), cy = Math.cos(moveYaw);
   let wx = -sy * cmd.forward + cy * cmd.strafe;
   let wz = -cy * cmd.forward - sy * cmd.strafe;
   const wl = Math.hypot(wx, wz);

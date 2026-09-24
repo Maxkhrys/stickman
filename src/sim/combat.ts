@@ -140,9 +140,6 @@ function offsetDir(yaw: number, pitch: number, dx: number, dy: number): Vec3 {
   return vnorm(v3(fw.x + rt.x * tx + up.x * ty, fw.y + rt.y * tx + up.y * ty, fw.z + rt.z * tx + up.z * ty));
 }
 
-/** Nearby-cover check: distance along which the barrel (not just the eye) must be clear. */
-const OBSTRUCTION_RANGE = 1.8;
-
 /**
  * One shot. Everything (ammo is handled by the caller) - damage, recoil, and the single 'shot' event that
  * drives muzzle flash, tracer, sound and impact - happens here in the same tick.
@@ -150,32 +147,35 @@ const OBSTRUCTION_RANGE = 1.8;
 export function traceFireLine(ctx: { world: SimContext['world']; fighters: readonly Fighter[] }, f: Fighter, dir: Vec3) {
   const eye = eyePos(f);
   const def = WEAPONS[f.weapons[f.cur].id];
-  let tr = traceShot(ctx, f, eye, dir, def.range);
-  // Barrel obstruction: the camera may see over a ledge the gun is still behind.
+  const intended = traceShot(ctx, f, eye, dir, def.range);
   const muzzle = muzzlePos(f);
-  let obstructed = false;
   const em = vsub(muzzle, eye);
   const emLen = Math.hypot(em.x, em.y, em.z);
-  const gunInWall = ctx.world.raycast(eye, vnorm(em), emLen);
+  const gunInWall = emLen > 1e-6 ? ctx.world.raycast(eye, vnorm(em), emLen) : null;
   if (gunInWall) {
-    obstructed = true;
-    tr = { t: gunInWall.t, point: vaddScaled(eye, vnorm(em), gunInWall.t), normal: gunInWall.normal, fighter: null, part: null };
-  } else {
-    const near = Math.min(tr.t, OBSTRUCTION_RANGE);
-    const target = vaddScaled(eye, dir, near);
-    const mt = vsub(target, muzzle);
-    const mtLen = Math.hypot(mt.x, mt.y, mt.z);
-    if (mtLen > 0.05) {
-      const md = vnorm(mt);
-      const block = ctx.world.raycast(muzzle, md, mtLen - 0.02);
-      if (block) {
-        obstructed = true;
-        tr = { t: block.t, point: vaddScaled(muzzle, md, block.t), normal: block.normal, fighter: null, part: null };
-      }
-    }
+    const emDir = vnorm(em);
+    const point = vaddScaled(eye, emDir, gunInWall.t);
+    // Keep the event's visual start on the shooter's side of the wall as well.
+    const safeMuzzle = vaddScaled(eye, emDir, Math.max(0, gunInWall.t - 0.01));
+    return {
+      tr: { t: gunInWall.t, point, normal: gunInWall.normal, fighter: null, part: null } as TraceResult,
+      muzzle: safeMuzzle,
+      obstructed: true,
+    };
   }
-
-  return { tr, muzzle, obstructed };
+  const mt = vsub(intended.point, muzzle);
+  const length = Math.hypot(mt.x, mt.y, mt.z);
+  // A very close eye hit must not make the barrel shoot back through the player.
+  if (length < 1e-6 || vdot(mt, dir) <= 0) {
+    return { tr: intended, muzzle: eye, obstructed: true };
+  }
+  // A tiny endpoint tolerance makes exact surface hits robust without extending range.
+  const actual = traceShot(ctx, f, muzzle, vnorm(mt), length + 1e-4);
+  const beforeTarget = actual.t < length - 1e-3;
+  // With no earlier obstruction preserve the exact eye contact, including its hit part.
+  const tr = beforeTarget ? actual : intended;
+  if (beforeTarget) tr.t = Math.hypot(tr.point.x - eye.x, tr.point.y - eye.y, tr.point.z - eye.z);
+  return { tr, muzzle, obstructed: beforeTarget && !tr.fighter && tr.normal !== null };
 }
 
 export function fireHitscan(ctx: SimContext, f: Fighter, def: WeaponDef) {
@@ -185,6 +185,7 @@ export function fireHitscan(ctx: SimContext, f: Fighter, def: WeaponDef) {
   const aim = aimAngles(f, ctx.time);
   const dir = offsetDir(aim.yaw, aim.pitch, Math.cos(a) * r, Math.sin(a) * r);
   const { tr, muzzle, obstructed } = traceFireLine(ctx, f, dir);
+  const shotDir = vnorm(vsub(tr.point, muzzle));
   f.stats.shots++;
   if (f.spawnProtect > 0) {
     f.spawnProtect = 0;
@@ -197,7 +198,7 @@ export function fireHitscan(ctx: SimContext, f: Fighter, def: WeaponDef) {
     weapon: def.id,
     from: muzzle,
     to: tr.point,
-    dir,
+    dir: shotDir,
     hitWorld: !tr.fighter && tr.normal !== null,
     normal: tr.normal,
     obstructed,
@@ -211,7 +212,7 @@ export function fireHitscan(ctx: SimContext, f: Fighter, def: WeaponDef) {
     }
     f.stats.hits++;
     if (tr.part === 'head') f.stats.headshots++;
-    applyDamage(ctx, f, tr.fighter, dmg, tr.part, tr.point, dir, def.id);
+    applyDamage(ctx, f, tr.fighter, dmg, tr.part, tr.point, shotDir, def.id);
   }
 
   // ---- gameplay recoil: sharp impulse + sustained learnable climb ----

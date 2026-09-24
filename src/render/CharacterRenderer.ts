@@ -7,7 +7,7 @@ import { v3, type Vec3 } from '../sim/vec';
 import type { World } from '../sim/world';
 import type { Effects } from './Effects';
 import { makeBlobTexture } from './textures';
-import { buildTpGuns } from './tpGuns';
+import { buildTpGuns, TP_MUZZLES } from './tpGuns';
 import { toonGradient } from './vm/kit';
 import { SAND, graphiteGrainMap, sandMaterial } from './sand';
 import { STICK, StickAnim, type AnimView } from './anim/StickAnimator';
@@ -99,6 +99,8 @@ interface CharState {
   deathDir: THREE.Vector3;
   deathPulse: number;
   weaponTick: number;
+  weapon: WeaponId;
+  gunScale: number;
   /** last update() pass this fighter was posed in; a gap means the pose is stale */
   seen: number;
 }
@@ -279,7 +281,7 @@ export class CharacterRenderer {
         ro: [],
         rest: [],
         headPop: false,
-        wounds: [], forming: 0, deathDir: new THREE.Vector3(), deathPulse: 0, weaponTick: 0,
+        wounds: [], forming: 0, deathDir: new THREE.Vector3(), deathPulse: 0, weaponTick: 0, weapon: f.weapons[f.cur].id, gunScale: 1,
         seen: -1,
       };
       this.chars.set(f.id, c);
@@ -358,6 +360,7 @@ export class CharacterRenderer {
     let shadowN = 0;
     for (const f of fighters) {
       const c = this.stateOf(f);
+      c.weapon = f.weapons[f.cur].id;
       const firstPerson = f.id === viewerId && f.alive;
       if (f.alive && c.dead) {
         c.dead = false;
@@ -506,6 +509,7 @@ export class CharacterRenderer {
     if (!c.dead && c.anim.showGun) {
       const w = f.weapons[f.cur].id as WeaponId;
       const formed = SAND.enabled ? Math.max(0.16, 1 - Math.min(1, f.switchTimer / Math.max(0.01, WEAPONS[w].drawTime)) * 0.84) : 1;
+      c.gunScale = formed;
       this.emit(`gun_${w}` as PrimId, c.anim.gunPos, c.anim.gunQuat, ts.set(formed, formed, formed), WHITE, 'uniform', line);
     }
   }
@@ -598,6 +602,14 @@ export class CharacterRenderer {
     sk.headUp.x = up.x;
     sk.headUp.y = up.y;
     sk.headUp.z = up.z;
+  }
+
+  /** Current animated barrel tip, never an eye-relative approximation or a stale hidden pose. */
+  muzzleOf(id: number, weapon: WeaponId, out: THREE.Vector3): boolean {
+    const c = this.chars.get(id);
+    if (!c || c.dead || c.seen !== this.pass || c.weapon !== weapon || !c.anim.showGun || weapon === 'melee') return false;
+    out.set(...TP_MUZZLES[weapon]).multiplyScalar(c.gunScale).applyQuaternion(c.anim.gunQuat).add(c.anim.gunPos);
+    return true;
   }
 
   /** Head position for effects (head pop, name tags). */

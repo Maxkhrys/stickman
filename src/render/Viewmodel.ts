@@ -103,6 +103,8 @@ export class Viewmodel {
   private flash: THREE.Sprite;
   private flashCore: THREE.Sprite;
   private flashT = 0;
+  private flashWeapon: WeaponId | null = null;
+  private pendingPuff: WeaponId | null = null;
   private flashLife = 0.04;
   private puffs: { s: THREE.Sprite; t: number; life: number; v: THREE.Vector3 }[] = [];
   private puffIdx = 0;
@@ -164,8 +166,8 @@ export class Viewmodel {
     // first-person hands match the marker stick fighter: same dry-marker fill, sights untouched
     for (const g of [this.handR.group, this.handL.group, this.sleeveR, this.sleeveL]) markerizeHands(g);
     const flashTex = makeFlashTexture();
-    this.flash = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
-    this.flashCore = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTex, color: 0xfff6d0, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+    this.flash = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTex, depthWrite: false, transparent: true }));
+    this.flashCore = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTex, color: 0xfff6d0, depthWrite: false, transparent: true }));
     this.flash.visible = this.flashCore.visible = false;
     this.scene.add(this.flash, this.flashCore);
     const smoke = makeSmokeTexture();
@@ -183,7 +185,7 @@ export class Viewmodel {
   }
 
   /** Decorative kick. Gameplay recoil is separate (it moves the camera/aim in the sim). */
-  fire(weapon: WeaponId, adsE: number) {
+  fire(weapon: WeaponId, adsE: number, showFlash = true) {
     const a = 1 - adsE;
     if (weapon === 'ar' || weapon === 'smg' || weapon === 'carbine') {
       this.kickZ.v += weapon === 'smg' ? 0.45 : weapon === 'carbine' ? 1.1 : 0.75;
@@ -202,21 +204,22 @@ export class Viewmodel {
       this.kickRoll.v += 1.4;
       this.flashLife = 0.06;
     }
-    this.flashT = this.flashLife;
+    this.flashWeapon = weapon;
+    this.flashT = showFlash ? this.flashLife : 0;
     this.flash.material.rotation = Math.random() * Math.PI;
     this.flashCore.material.rotation = Math.random() * Math.PI;
     const size = (weapon === 'sniper' ? 0.2 : weapon === 'pistol' ? 0.13 : 0.1) * (1 - 0.45 * adsE) * (0.85 + Math.random() * 0.3);
     this.flash.scale.set(size, size, 1);
     this.flashCore.scale.set(size * 0.45, size * 0.45, 1);
-    // ink puff drifting off the muzzle
-    const p = this.puffs[this.puffIdx];
-    this.puffIdx = (this.puffIdx + 1) % this.puffs.length;
-    p.t = 0;
-    p.life = weapon === 'sniper' ? 0.5 : 0.28;
-    p.v.set((Math.random() - 0.5) * 0.05, 0.08 + Math.random() * 0.05, -0.1);
-    p.s.visible = true;
-    p.s.position.copy(this.muzzleVM);
-    p.s.userData.base = weapon === 'sniper' ? 0.09 : 0.05;
+    this.pendingPuff = showFlash ? weapon : null;
+  }
+
+  resetShotEffects() {
+    this.flashT = 0;
+    this.flashWeapon = null;
+    this.pendingPuff = null;
+    this.flash.visible = this.flashCore.visible = false;
+    for (const p of this.puffs) p.s.visible = false;
   }
 
   land(speed: number) {
@@ -230,6 +233,9 @@ export class Viewmodel {
   update(dt: number, s: ViewmodelInput) {
     this.time += dt;
     if (s.weapon !== this.cur) {
+      // Preserve a shot already queued for the newly selected rig, not the old one.
+      if (this.flashWeapon !== s.weapon) this.resetShotEffects();
+      for (const p of this.puffs) p.s.visible = false;
       this.rigs[this.cur].root.visible = false;
       this.cur = s.weapon;
       this.formT = 1;
@@ -264,7 +270,7 @@ export class Viewmodel {
     this.handR.group.visible = this.handL.group.visible = visible;
     this.sleeveR.visible = this.sleeveL.visible = visible;
     if (!s.alive) {
-      this.flash.visible = this.flashCore.visible = false;
+      this.resetShotEffects();
       return;
     }
 
@@ -500,14 +506,25 @@ export class Viewmodel {
 
     // ---- muzzle flash + ink puffs ----
     rig.sockets.muzzle.getWorldPosition(this.muzzleVM);
-    if (this.flashT > 0) {
+    if (this.pendingPuff && visible && this.pendingPuff === rig.id) {
+      const p = this.puffs[this.puffIdx];
+      this.puffIdx = (this.puffIdx + 1) % this.puffs.length;
+      p.t = 0; p.life = 0.14;
+      p.v.set((Math.random() - 0.5) * 0.03, 0.06, -0.08);
+      p.s.visible = true;
+      p.s.position.copy(this.muzzleVM);
+      p.s.userData.base = 0.022;
+    }
+    this.pendingPuff = null;
+    if (this.flashT > 0 && this.flashWeapon === rig.id) {
       // shown at full strength on the frame of the shot, then gone within ~1-2 frames
       this.flash.position.copy(this.muzzleVM);
       this.flashCore.position.copy(this.muzzleVM);
       const a = Math.max(0, this.flashT / this.flashLife);
       this.flash.material.opacity = a;
       this.flashCore.material.opacity = Math.min(1, a * 1.3);
-      this.flash.visible = this.flashCore.visible = rig.id !== 'melee' && visible;
+      this.flash.visible = rig.id !== 'melee' && visible;
+      this.flashCore.visible = false; // one ink-outlined star, not two overlapping additive blooms
       this.flashT -= dt;
     } else this.flash.visible = this.flashCore.visible = false;
     for (const p of this.puffs) {

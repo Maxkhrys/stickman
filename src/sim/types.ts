@@ -17,6 +17,8 @@ export interface InputCommand {
   seq: number;
   yaw: number;
   pitch: number;
+  /** Optional raw view yaw for camera-relative movement; yaw/pitch remain the firing angles. */
+  moveYaw?: number;
   /** -1..1, +1 = forward */
   forward: number;
   /** -1..1, +1 = right */
@@ -44,13 +46,13 @@ export type GameEvent =
       type: 'shot';
       id: number;
       weapon: WeaponId;
-      /** sim muzzle position (third-person tracer origin) */
+      /** authoritative safe muzzle position; presentation may use a visible barrel socket */
       from: Vec3;
       to: Vec3;
       dir: Vec3;
       hitWorld: boolean;
       normal: Vec3 | null;
-      /** the barrel was blocked by nearby geometry the eye could see past */
+      /** the eye-to-barrel or full barrel-to-impact path was blocked */
       obstructed: boolean;
     }
   | { type: 'melee'; id: number; heavy: boolean; lunge: boolean; windup: boolean }

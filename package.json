@@ -11,7 +11,8 @@
     "test": "esbuild tests/sim.test.ts --bundle --platform=node --log-level=warning --outfile=node_modules/.cache/sim.test.cjs && node node_modules/.cache/sim.test.cjs",
     "test:upgrade": "esbuild tests/upgrade.test.ts --bundle --platform=node --log-level=warning --outfile=node_modules/.cache/upgrade.test.cjs && node node_modules/.cache/upgrade.test.cjs",
     "test:motion": "esbuild tests/motion.test.ts --bundle --platform=node --log-level=warning --outfile=node_modules/.cache/motion.test.cjs && node node_modules/.cache/motion.test.cjs",
-    "test:sketch": "esbuild tests/sketch.test.ts --bundle --platform=node --log-level=warning --outfile=node_modules/.cache/sketch.test.cjs && node node_modules/.cache/sketch.test.cjs"
+    "test:sketch": "esbuild tests/sketch.test.ts --bundle --platform=node --log-level=warning --outfile=node_modules/.cache/sketch.test.cjs && node node_modules/.cache/sketch.test.cjs",
+    "test:aim": "esbuild tests/aim.test.ts --bundle --platform=node --log-level=warning --outfile=node_modules/.cache/aim.test.cjs && node node_modules/.cache/aim.test.cjs"
   },
   "dependencies": {
     "three": "^0.170.0"

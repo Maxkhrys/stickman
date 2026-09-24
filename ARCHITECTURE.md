@@ -68,7 +68,7 @@ bounds speeds), and never trust client hit claims.
 
 ## Third person, progression and objectives
 
-Third person changes presentation only. `clipCamera` sweeps a small camera volume against the collision world. The HUD projects `traceFireLine`, shared with combat, to show the real eye/muzzle shot path. No camera origin is accepted as shooting authority. Scoped sniper aiming returns to first person. Online competitive queues should enforce one perspective per lobby to avoid mixed-perspective visibility advantages.
+Third person changes camera presentation and eye-ray convergence, not damage authority. `clipCamera` sweeps a small camera volume against the collision world. The crosshair stays at screen centre. Shoulder aim converts the exact centre ray into ordinary eye-origin firing angles; `moveYaw` preserves raw camera-relative movement. There is no target cone, target lock or homing. `traceFireLine` checks eye-to-barrel cover and the full barrel-to-impact segment. A blocked barrel is indicated without moving the crosshair. No camera origin is accepted as shooting authority. Scoped sniper aiming returns to first person. Online competitive queues should enforce one perspective per lobby to avoid mixed-perspective visibility advantages.
 
 `Profile` owns local earned currency, unlocks, cosmetic character inks, UTC daily contracts and mastery. Purchases occur before matches and produce the next match's primary/color options. Completion events settle rewards once per match ID. This is an offline progression store, not an anti-cheat boundary. An authoritative multiplayer service must own purchases, validate equipped inventory and sign/commit match rewards in its database.
 

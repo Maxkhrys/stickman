@@ -31,7 +31,7 @@ const GRAPHITE = new THREE.Color(0x202129);
 
 /** Dark granular material a fighter's body turns into when it tears or collapses. */
 export function dustColor(color: number): number {
-  return new THREE.Color(0x24232b).lerp(new THREE.Color(color), 0.3).getHex();
+  return new THREE.Color(0x26262e).lerp(new THREE.Color(color), 0.12).getHex();
 }
 
 class Batch {

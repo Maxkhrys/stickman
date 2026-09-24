@@ -9,6 +9,7 @@ import { Sfx } from '../audio/Sfx';
 import { LocalAdapter } from '../net/LocalAdapter';
 import type { NetworkAdapter } from '../net/NetworkAdapter';
 import { GameRenderer } from '../render/GameRenderer';
+import { dustColor } from '../render/CharacterRenderer';
 import { aimAngles, computeSpread, traceFireLine } from '../sim/combat';
 import { eyePos, type Fighter } from '../sim/fighter';
 import { TICK_DT } from '../sim/match';
@@ -17,6 +18,7 @@ import { flatRight, forwardFromAngles } from '../sim/vec';
 import { Hud, WNAME } from '../ui/Hud';
 import { Menus } from '../ui/Menus';
 import { ScopeOverlay } from '../ui/ScopeOverlay';
+import { AnimDebugPanel } from '../ui/AnimDebugPanel';
 
 type AppState = 'menu' | 'playing' | 'paused' | 'ended';
 
@@ -54,6 +56,7 @@ export class App {
   readonly latency = { sim: [] as number[], frame: [] as number[] };
   private measuredPress = 0;
   private awaitFrame = 0;
+  private animDebug: AnimDebugPanel | null = null;
 
   constructor() {
     if (!this.profile.owns(this.settings.primary)) this.settings.primary = 'ar';
@@ -87,6 +90,7 @@ export class App {
       if (this.state === 'playing' && !this.input.locked) void this.input.lock();
     });
     this.loop = new FixedLoop(TICK_DT, () => this.tick(), (a, fdt) => this.frame(a, fdt));
+    if (new URLSearchParams(location.search).has('animdebug')) this.animDebug = new AnimDebugPanel(this.ui, this.renderer, this.loop);
     this.applySettings();
     this.hud.show(false);
     void this.startBackdrop();
@@ -262,7 +266,9 @@ export class App {
         if (!e.blocked) {
           const ink = victim ? victim.color : 0x1b1b24;
           if (SAND.enabled) {
-            R.effects.sandBurst(tv, ink, SAND.impactGrains + (head ? 7 : 0), 3.8, tv2);
+            // graphite chips tear from the hit point; a few flecks carry the fighter's ink
+            R.effects.sandBurst(tv, dustColor(ink), SAND.impactGrains + (head ? 7 : 0), 3.8, tv2);
+            R.effects.sandBurst(tv, ink, 3 + (head ? 3 : 0), 2.6, tv2, 0.9);
             if (victim && !e.killed) R.characters.wound(e.victim, e.pos, victim.yaw);
             const [sd, span] = this.spatial(e.pos);
             this.sfx.sandImpact(sd, span);
@@ -322,7 +328,7 @@ export class App {
         if (e.headshot) {
           const h = R.characters.headOf(victim.id);
           if (h) {
-            if (SAND.enabled) R.effects.sandBurst(h, victim.color, 28, 4.6, tv2, SAND.pileLife);
+            if (SAND.enabled) R.effects.sandBurst(h, dustColor(victim.color), 28, 4.6, tv2, SAND.pileLife);
             else {
               R.effects.burst(h, victim.color, 16, 5, 0.07, 0.7, 1);
               R.effects.burst(h, 0x1b1b24, 10, 6, 0.05, 0.7, 1);
@@ -474,6 +480,7 @@ export class App {
       if (this.latency.frame.length > 30) this.latency.frame.shift();
       this.awaitFrame = 0;
     }
+    this.animDebug?.update(me);
     if (!me) return;
     const z = this.renderer.zoom;
     const def = WEAPONS[me.weapons[me.cur].id];
@@ -515,8 +522,10 @@ export class App {
         `<b>last hit</b> ${this.rangeLast.dmg} · ${this.rangeLast.part} · ${this.rangeLast.dist.toFixed(1)} m<br>` +
           `<b>dps</b> ${dps} · <b>acc</b> ${acc}% · <b>spread</b> ${(computeSpread(me) * 1000).toFixed(1)} mrad<br>` +
           `<b>speed</b> ${hs.toFixed(1)} m/s${me.sliding ? ' · slide' : ''} · <b>ADS</b> ${Math.round(z.adsE * 100)}%<br>` +
-          `<b>click→shot</b> ${lat.toFixed(1)} ms · <b>→frame</b> ${latF.toFixed(1)} ms<br>` +
-          `<b>frame</b> ${this.loop.frameMs.toFixed(2)} ms · ${this.renderer.renderer.info.render.calls} draws<br>` +
+          (this.settings.showFps
+            ? `<b>click→shot</b> ${lat.toFixed(1)} ms · <b>→frame</b> ${latF.toFixed(1)} ms<br>` +
+              `<b>frame</b> ${this.loop.frameMs.toFixed(2)} ms · ${this.renderer.renderer.info.render.calls} draws<br>`
+            : '') +
           `<span class="k">H</span> hit regions ${this.settings.showHitboxes ? 'on' : 'off'} · <span class="k">1-4</span> weapons`,
       );
     } else this.hud.setStats(null);

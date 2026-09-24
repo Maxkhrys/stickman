@@ -601,12 +601,15 @@ export class StickAnim {
     gy -= 0.18 * dE;
     gz -= 0.08 * dE;
     // reload: tilt the magwell toward the support hand, pull in
-    rr += 0.6 * reloadE;
-    rp += 0.22 * reloadE;
-    gx -= 0.07 * reloadE;
-    gy += 0.02 * reloadE;
-    gz -= 0.04 * reloadE;
-    twistU += 0.12 * reloadE;
+    // (the tilt eases in with the mag-out beat so the swap reads from across the map)
+    const tilt = reloadE * (0.75 + 0.25 * Math.sin(clamp((reloadP - 0.2) / 0.6, 0, 1) * Math.PI));
+    rr += 0.95 * tilt;
+    rp += 0.32 * tilt;
+    ry += 0.25 * tilt;
+    gx -= 0.1 * reloadE;
+    gy += 0.03 * reloadE;
+    gz -= 0.06 * reloadE;
+    twistU += 0.15 * reloadE;
     // bolt: rock the rifle off the shoulder while cycling
     const boltE = boltP >= 0 ? Math.sin(boltP * Math.PI) : 0;
     rr += 0.18 * boltE;

@@ -55,6 +55,37 @@ export function sandGrainMap() {
 }
 const grainMap = sandGrainMap;
 
+let sharedGraphite: THREE.CanvasTexture | null = null;
+/**
+ * Neutral graphite tooth for the stick fighters: fine pencil grain with a few darker flecks, bright
+ * on average so the toon ramp still shades the limbs. Read at arm's length, invisible at range.
+ */
+export function graphiteGrainMap() {
+  if (sharedGraphite) return sharedGraphite;
+  const S = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = S;
+  const ctx = canvas.getContext('2d')!;
+  const pixels = ctx.createImageData(S, S);
+  let seed = 0x47524146;
+  const rnd = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    // diagonal hatching tooth + noise
+    const hatch = Math.sin((x + y) * 0.9) * 6;
+    let v = 226 + hatch + (rnd() - 0.5) * 30;
+    if (rnd() < 0.025) v -= 50;
+    v = Math.max(0, Math.min(255, v));
+    pixels.data.set([v, v, v * 1.02, 255], (y * S + x) * 4);
+  }
+  ctx.putImageData(pixels, 0, 0);
+  sharedGraphite = new THREE.CanvasTexture(canvas);
+  sharedGraphite.wrapS = sharedGraphite.wrapT = THREE.RepeatWrapping;
+  sharedGraphite.repeat.set(3, 3);
+  sharedGraphite.generateMipmaps = true;
+  sharedGraphite.minFilter = THREE.LinearMipmapLinearFilter;
+  return sharedGraphite;
+}
+
 export function sandMaterial<T extends THREE.MeshToonMaterial>(material: T): T {
   // Keep the expressive head's face map; other solids share one cached granular map.
   if (!material.map) material.map = grainMap();

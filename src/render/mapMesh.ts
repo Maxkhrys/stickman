@@ -35,6 +35,19 @@ class GeoBuilder {
  * Bakes the level into 3 merged meshes (graph-paper tops, hatched sides, ruled outer walls) with
  * baked face shading in vertex colours + one LineSegments ink outline. ~5 draw calls for the level.
  */
+const _hsl = { h: 0, s: 0, l: 0 };
+/**
+ * Presentation palette: marker art direction on notebook paper. Purples become hot-pink marker and
+ * greens become yellow highlighter; cyan, ink and paper stay. Map data and collision are untouched.
+ */
+function notebookColor(c: THREE.Color): THREE.Color {
+  c.getHSL(_hsl);
+  if (_hsl.s < 0.25) return c;
+  if (_hsl.h > 0.68 && _hsl.h < 0.86) c.setHSL(0.93, Math.min(1, _hsl.s + 0.1), Math.min(0.68, _hsl.l + 0.06));
+  else if (_hsl.h > 0.22 && _hsl.h < 0.45) c.setHSL(0.13, Math.min(1, _hsl.s + 0.1), Math.max(0.55, _hsl.l));
+  return c;
+}
+
 export function buildMapMesh(map: MapDef): THREE.Group {
   const group = new THREE.Group();
   const buckets = [new GeoBuilder(), new GeoBuilder(), new GeoBuilder()];
@@ -50,7 +63,7 @@ export function buildMapMesh(map: MapDef): THREE.Group {
   const quad = (p0: number[], p1: number[], p2: number[], p3: number[], n: number[], color: number, uvs: number[][], bucket: Bucket, uvScale = TILE) => {
     const g = buckets[bucket];
     const base = g.pos.length / 3;
-    c.set(color);
+    notebookColor(c.set(color));
     // pastel-ise so paper texture still reads through, but keep colours loud
     const s = shade(n[0], n[1], n[2]);
     for (const [i, p] of [p0, p1, p2, p3].entries()) {
@@ -147,7 +160,7 @@ export function buildMapMesh(map: MapDef): THREE.Group {
   for (const p of map.props) group.add(buildPencil(p.x, p.z, p.h, p.r, p.color));
 
   // ---- ink splats on the floor (instanced, one draw call) ----
-  const splatColors = [0xff4f9a, 0x8b5cf6, 0x22c6e0, 0xffd23f, 0x3ddc84, 0x1b1b24];
+  const splatColors = [0xff4f9a, 0xff4f9a, 0xffd23f, 0xffd23f, 0x22c6e0, 0x1b1b24];
   const nSplat = 70;
   const splats = new THREE.InstancedMesh(
     new THREE.PlaneGeometry(1, 1),

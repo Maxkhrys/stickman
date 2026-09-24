@@ -18,11 +18,14 @@ export function makeGraphPaperTexture(): THREE.Texture {
   g.fillRect(0, 0, s, s);
   const img = g.getImageData(0, 0, s, s);
   for (let i = 0; i < img.data.length; i += 4) {
-    const n = 248 + Math.random() * 7;
-    img.data[i] = img.data[i + 1] = img.data[i + 2] = n;
+    // warm cream paper tooth
+    const n = 247 + Math.random() * 8;
+    img.data[i] = n;
+    img.data[i + 1] = n - 3;
+    img.data[i + 2] = n - 11;
   }
   g.putImageData(img, 0, 0);
-  g.strokeStyle = 'rgba(90,140,200,0.22)';
+  g.strokeStyle = 'rgba(80,135,225,0.26)';
   g.lineWidth = 1;
   for (let i = 0; i <= 8; i++) {
     const p = (i * s) / 8 + 0.5;
@@ -33,7 +36,7 @@ export function makeGraphPaperTexture(): THREE.Texture {
     g.lineTo(s, p);
     g.stroke();
   }
-  g.strokeStyle = 'rgba(60,90,150,0.35)';
+  g.strokeStyle = 'rgba(55,105,210,0.4)';
   g.lineWidth = 2.5;
   g.strokeRect(1, 1, s - 2, s - 2);
   return canvasTex(c);

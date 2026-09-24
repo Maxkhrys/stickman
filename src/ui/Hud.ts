@@ -278,6 +278,7 @@ export class Hud {
       if (this.noteTimer <= 0) this.note.style.opacity = '0';
     }
     if (this.noticeTimer > 0) this.noticeTimer -= dt;
+    this.top.classList.toggle('practice', info.mode === 'range');
     if (info.mode !== 'range') {
       const t = Math.max(0, Math.ceil(info.timeLeft));
       this.top.querySelector('.timer')!.textContent = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
@@ -286,8 +287,8 @@ export class Hud {
       const leader = others.reduce((a, b) => (b.stats[field] > a.stats[field] ? b : a), others[0] ?? fighters[0]);
       this.top.querySelector('.score')!.textContent = me ? `you ${me.stats[field]} · best ${leader.name} ${leader.stats[field]} · to ${info.scoreLimit}` : '';
     } else {
-      this.top.querySelector('.timer')!.textContent = 'PRACTICE';
-      this.top.querySelector('.score')!.textContent = '';
+      this.top.querySelector('.timer')!.textContent = 'Practice';
+      this.top.querySelector('.score')!.textContent = 'free fire · targets reset';
     }
     if (!me) return;
     const hpFrac = me.hp / me.maxHp;
@@ -308,7 +309,8 @@ export class Hud {
     const key = `${slot.id}|${slot.mag}|${me.cur}|${Math.round(reloadP * 20)}|${me.weapons.length}`;
     if (key !== this.lastAmmoKey) {
       this.lastAmmoKey = key;
-      const slots = me.weapons.map((w, i) => `<span class="${i === me.cur ? 'on' : ''}"><b>${i < 4 ? i + 1 : '↕'}</b> ${WNAME[w.id]}</span>`).join('');
+      // compact slots: the drawn weapon carries its name, the rest are numbered chips
+      const slots = me.weapons.map((w, i) => `<span class="${i === me.cur ? 'on' : ''}" title="${WNAME[w.id]}"><b>${i < 4 ? i + 1 : '↕'}</b>${i === me.cur ? ' ' + WNAME[w.id] : ''}</span>`).join('');
       const mag = def.kind === 'melee' ? '✎' : String(slot.mag);
       this.ammoPanel.innerHTML =
         `<div class="wname">${WNAME[slot.id]}</div>` +

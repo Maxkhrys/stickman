@@ -103,7 +103,7 @@ export class GameRenderer {
   private hitStopT = 0;
   thirdPersonActive = false;
   /** debug orbit camera around the local fighter (yaw relative to the fighter's aim) */
-  inspect: { yaw: number; pitch: number; dist: number; height: number } | null = null;
+  inspect: { yaw: number; pitch: number; dist: number; height: number; world?: boolean } | null = null;
   private shoulderOffset = 0.92;
   private tp = { id: -1, y: 0, v: 0, frac: 1, fracV: 0 };
   private tpFwd = new THREE.Vector3();
@@ -335,7 +335,7 @@ export class GameRenderer {
 
       if (this.inspect) {
         const ins = this.inspect;
-        const yy = fi.viewYaw + ins.yaw;
+        const yy = ins.world ? ins.yaw : fi.viewYaw + ins.yaw;
         const cx = px, cyy = py + ins.height, cz = pz;
         this.camera.position.set(cx - Math.sin(yy) * Math.cos(ins.pitch) * -ins.dist, cyy + Math.sin(ins.pitch) * ins.dist, cz - Math.cos(yy) * Math.cos(ins.pitch) * -ins.dist);
         this.camera.lookAt(cx, cyy, cz);

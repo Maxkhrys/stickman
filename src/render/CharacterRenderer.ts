@@ -443,6 +443,7 @@ export class CharacterRenderer {
     v.sliding = f.sliding;
     v.ads = f.prevAds + (f.ads - f.prevAds) * a;
     v.alive = f.alive;
+    v.travelSpeed = f.travelSpeed;
     c.anim.update(f, v, dt, time, world);
     c.sk = c.anim.pose;
   }

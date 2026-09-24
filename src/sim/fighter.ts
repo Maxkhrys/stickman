@@ -49,6 +49,10 @@ export interface Fighter {
   /** gait phase (radians), advanced by distance travelled so feet stay planted */
   gait: number;
   prevGait: number;
+  /** legs run in reverse under the aim (with hysteresis so the 110 degree boundary cannot flicker) */
+  backpedal: boolean;
+  /** collision-resolved horizontal travel speed of the last tick (m/s, teleports rejected) */
+  travelSpeed: number;
 
   onGround: boolean;
   crouching: boolean;
@@ -128,6 +132,8 @@ export function createFighter(id: number, name: string, color: number, kind: Fig
     prevLowerYaw: 0,
     gait: 0,
     prevGait: 0,
+    backpedal: false,
+    travelSpeed: 0,
     onGround: true,
     crouching: false,
     sliding: false,

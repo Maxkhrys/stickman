@@ -36,6 +36,8 @@ export interface BodyState {
   onGround: boolean;
   sliding: boolean;
   ads: number;
+  /** collision-resolved travel speed (fighters carry it); falls back to |velocity| */
+  travelSpeed?: number;
 }
 
 export interface Skeleton {
@@ -82,8 +84,27 @@ export function createSkeleton(): Skeleton {
   };
 }
 
+// ---- gait vocabulary (shared by the sim skeleton and the presentation animator) ----
+//   step          one foot contact to the next contact of the OTHER foot (half a cycle)
+//   stride        one full cycle: left contact -> right contact -> left contact (two steps)
+//   cadence       foot contacts per second (both feet counted)
+//   duty          fraction of a cycle one foot spends in stance (on the ground)
+// Gait phase advances by collision-resolved travel / stride * 2pi, so the step schedule is set by
+// cadence(speed) and the feet stay planted: stance distance = stride * duty.
+
+/** Foot contacts per second. Ordinary full running speed (8.2 m/s) gives about 4.4. */
+export function cadence(speed: number): number {
+  return clamp(1.7 + speed * 0.33, 1.7, 4.8);
+}
+
+/** Full stride length (metres per gait cycle) at a travel speed. */
 export function strideLength(speed: number): number {
-  return clamp(0.8 + speed * 0.14, 0.8, 1.95);
+  return Math.max(1.0, (2 * speed) / cadence(speed));
+}
+
+/** Stance fraction of the cycle per foot: long double support at a walk, flight at a run. */
+export function gaitDuty(speed: number): number {
+  return 0.62 - 0.38 * clamp((speed - 2.5) / 5, 0, 1);
 }
 
 function set(o: Vec3, x: number, y: number, z: number) {
@@ -141,7 +162,7 @@ export function buildSkeleton(s: BodyState, weapon: WeaponId, out: Skeleton): Sk
   const c = clamp((MOVE.standHeight - s.height) / (MOVE.standHeight - MOVE.crouchHeight), 0, 1);
   const slide = s.sliding ? 1 : 0;
   const air = s.onGround ? 0 : 1;
-  const hs = Math.hypot(s.vel.x, s.vel.z);
+  const hs = s.travelSpeed ?? Math.hypot(s.vel.x, s.vel.z);
   const run = s.onGround && !s.sliding ? clamp(hs / MOVE.maxSpeed, 0, 1.2) : 0;
   out.crouch = c;
 
@@ -210,13 +231,17 @@ export function buildSkeleton(s: BodyState, weapon: WeaponId, out: Skeleton): Sk
     const toe = side < 0 ? out.lToe : out.rToe;
     let ph = (s.gait + (side > 0 ? Math.PI : 0)) % (Math.PI * 2);
     if (ph < 0) ph += Math.PI * 2;
+    // stance covers duty of the cycle; the foot's excursion is capped to what the leg can reach
+    const duty = gaitDuty(hs);
+    const half = Math.min((S * duty) / 2, 0.45);
+    const st = Math.PI * 2 * duty;
     let along: number, lift: number;
-    if (ph < Math.PI) {
-      along = S / 4 - (S / 2) * (ph / Math.PI);
+    if (ph < st) {
+      along = half - 2 * half * (ph / st);
       lift = 0;
     } else {
-      const u = (ph - Math.PI) / Math.PI;
-      along = -S / 4 + (S / 2) * (u * u * (3 - 2 * u));
+      const u = (ph - st) / (Math.PI * 2 - st);
+      along = -half + 2 * half * (u * u * (3 - 2 * u));
       lift = Math.sin(u * Math.PI) * liftH;
     }
     const wide = 0.12 + 0.07 * c;

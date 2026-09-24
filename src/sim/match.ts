@@ -243,6 +243,8 @@ export class Match implements SimContext {
     f.lowerYaw = f.prevLowerYaw = yaw;
     f.pitch = f.prevPitch = 0;
     f.gait = f.prevGait = 0;
+    f.backpedal = false;
+    f.travelSpeed = 0;
     f.hp = f.maxHp;
     f.alive = true;
     f.onGround = true;

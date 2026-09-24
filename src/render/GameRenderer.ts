@@ -398,7 +398,7 @@ export class GameRenderer {
 
     // ---------------- world ----------------
     this.characters.update(worldDt, fi.fighters, a, renderTime, fi.orbit || this.thirdPersonActive ? -1 : fi.spectateId, world, this.camera);
-    this.hitboxes.update(fi.fighters, fi.spectateId);
+    this.hitboxes.update(fi.fighters, this.thirdPersonActive ? -1 : fi.spectateId);
     this.effects.camPos.copy(this.camera.position);
     this.effects.setWorld(world);
     this.effects.update(worldDt);

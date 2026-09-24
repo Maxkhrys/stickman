@@ -7,6 +7,8 @@ export class FixedLoop {
   private last = 0;
   private raf = 0;
   running = false;
+  /** developer slow motion (sim and presentation together); 1 in normal play */
+  timeScale = 1;
   fps = 0;
   frameMs = 0;
   private fpsFrames = 0;
@@ -43,7 +45,7 @@ export class FixedLoop {
 
   /** One display frame: fixed ticks for the elapsed time (capped), then an interpolated render. */
   advance(frameDt: number) {
-    const fdt = Math.min(frameDt, 0.25); // tab switch / breakpoint
+    const fdt = Math.min(frameDt, 0.25) * this.timeScale; // tab switch / breakpoint
     this.acc += fdt;
     let steps = 0;
     while (this.acc >= this.dt && steps < FixedLoop.MAX_CATCHUP) {

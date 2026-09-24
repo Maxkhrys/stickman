@@ -164,7 +164,7 @@ const BASE_WEAPONS: Record<Exclude<WeaponId, 'smg' | 'carbine'>, WeaponDef> = {
     recoilMaxPitch: 0.085,
     adsRecoilMult: 0.75,
     adsTime: 0.17,
-    adsZoom: 0.8,
+    adsZoom: 0.6, // ~1.67x
     moveSpeedMult: 1.0,
     adsMoveMult: 0.75,
   },
@@ -249,7 +249,7 @@ const BASE_WEAPONS: Record<Exclude<WeaponId, 'smg' | 'carbine'>, WeaponDef> = {
     recoilMaxPitch: 0.06,
     adsRecoilMult: 0.8,
     adsTime: 0.14,
-    adsZoom: 0.88,
+    adsZoom: 0.71, // ~1.4x
     moveSpeedMult: 1.05,
     adsMoveMult: 0.8,
   },
@@ -311,7 +311,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     fireInterval: 60 / 900, reloadTime: 1.55, drawTime: 0.2, adsTime: 0.12,
     falloffStart: 14, falloffEnd: 42, falloffMin: 0.48,
     spreadHip: 0.009, spreadMove: 0.018, spreadAir: 0.035, spreadPerShot: 0.003,
-    adsSpreadMult: 0.2, adsMoveSpreadMult: 0.45, moveSpeedMult: 1.07,
+    adsSpreadMult: 0.2, adsMoveSpreadMult: 0.45, moveSpeedMult: 1.07, adsZoom: 0.67, // ~1.5x
     kickPitch: 0.006, kickYaw: 0.0014, recoilMaxPitch: 0.065,
     recoilPattern: [[0.003, 0], [0.003, 0.0005], [0.003, 0.001], [0.0025, -0.001]], recoilLoopFrom: 0,
   },
@@ -321,7 +321,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     fireInterval: 0.23, reloadTime: 1.8, drawTime: 0.28, adsTime: 0.19,
     falloffStart: 45, falloffEnd: 100, falloffMin: 0.75,
     spreadHip: 0.007, spreadMove: 0.025, spreadPerShot: 0.006, spreadRecover: 0.16,
-    adsSpreadMult: 0.06, adsMoveSpreadMult: 0.18, adsZoom: 0.7,
+    adsSpreadMult: 0.06, adsMoveSpreadMult: 0.18, adsZoom: 0.555, // ~1.8x
     kickPitch: 0.023, kickYaw: 0.0008, kickTau: 0.06,
     recoilPattern: [[0.008, 0], [0.007, 0.0008], [0.006, -0.0008]], recoilLoopFrom: 0,
   },

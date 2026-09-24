@@ -304,9 +304,10 @@ export class GameRenderer {
         // only the pivot's vertical motion and the collision pull-in are smoothed.
         const tp = this.tp;
         const runOpen = Math.max(0, Math.min(1, (hs - MOVE.maxSpeed * 0.7) / (MOVE.maxSpeed * 0.5))) * (1 - adsE);
-        const side = (fi.shoulder ?? 1) * (0.92 - adsE * 0.3 - runOpen * 0.06);
+        // ADS: the fighter slides further toward the screen edge so the target area stays clear
+        const side = (fi.shoulder ?? 1) * (0.92 + adsE * 0.14 - runOpen * 0.06);
         this.shoulderOffset += (side - this.shoulderOffset) * (1 - Math.exp(-14 * dt));
-        const back = 2.75 - adsE * 1.15 + runOpen * 0.35 + (me.sliding ? 0.25 : 0);
+        const back = 2.75 - adsE * 0.6 + runOpen * 0.35 + (me.sliding ? 0.25 : 0);
         const lift = 0.2 - adsE * 0.1;
         // vertical pivot: velocity-compensated critically damped follow -> no steady lag, but jump
         // take-offs, landings and step-ups are eased instead of jerked

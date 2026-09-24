@@ -632,20 +632,20 @@ export class StickAnim {
       if (f.meleeWindup > 0) {
         // heavy wind-up: cock the pencil back above the shoulder, torso coils away
         const k = smooth01(1 - f.meleeWindup / 0.3);
-        gx = 0.2 + 0.04 * k; gy = -0.28 + 0.4 * k; gz = 0.27 - 0.34 * k;
-        rp = 0.5 - 0.3 * k;
-        twistU -= 0.55 * k;
+        gx = 0.2 + 0.06 * k; gy = -0.28 + 0.46 * k; gz = 0.27 - 0.44 * k;
+        rp = 0.5 - 0.35 * k;
+        twistU -= 0.7 * k;
         meleeActive = true;
       } else if (heavy && sinceMelee >= 0.3 && sinceMelee < 0.85) {
         // stab straight through the aim line, then recover to guard
         const t = sinceMelee - 0.3;
         const k = smooth01(t / 0.07), wS = 1 - smooth01((t - 0.2) / 0.32);
-        const sx = 0.24 + (0.05 - 0.24) * k, syy = 0.12 + (-0.06 - 0.12) * k, sz = -0.07 + (0.58 + 0.07) * k;
+        const sx = 0.26 + (0.05 - 0.26) * k, syy = 0.18 + (-0.06 - 0.18) * k, sz = -0.17 + (0.58 + 0.17) * k;
         gx = sx * wS + 0.2 * (1 - wS);
         gy = syy * wS - 0.28 * (1 - wS);
         gz = sz * wS + 0.27 * (1 - wS);
         rp = 0.1 * wS + 0.5 * (1 - wS);
-        twistU += (-0.55 + 0.9 * k) * wS;
+        twistU += (-0.7 + 1.05 * k) * wS;
         meleeActive = true;
       } else if (!heavy && sinceMelee >= 0 && sinceMelee < 0.4) {
         // light slash: the strike lands on the first tick, so the arc is mostly follow-through

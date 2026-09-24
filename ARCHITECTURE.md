@@ -60,6 +60,7 @@ bounds speeds), and never trust client hit claims.
 | `src/net/` | `NetworkAdapter` interface, `LocalAdapter` |
 | `src/core/` | fixed loop, raw input → commands, settings (localStorage) |
 | `src/sim/body.ts` | deterministic skeleton shared by hitboxes (capsules + OBBs) and character rendering, so what you see is what you hit |
+| `src/render/anim/` | presentation animation: `StickAnim` turns the sim skeleton into the drawn pose (planted feet, pelvis/lean springs, weapon holds + IK, melee arcs); `holds.ts` per-weapon handling; `AnimDebug` overlays. Never read by the sim or hitboxes |
 | `src/render/` | map baking (fat ink lines, contact shadows), instanced toon characters + ragdolls, `vm/` viewmodel kit (weapons, gloves, sockets), render-to-texture sniper lens, effects, camera rig |
 | `src/audio/` | procedural WebAudio SFX |
 | `src/ui/` | HUD + menus (DOM) |
@@ -72,3 +73,16 @@ Third person changes presentation only. `clipCamera` sweeps a small camera volum
 `Profile` owns local earned currency, unlocks, cosmetic character inks, UTC daily contracts and mastery. Purchases occur before matches and produce the next match's primary/color options. Completion events settle rewards once per match ID. This is an offline progression store, not an anti-cheat boundary. An authoritative multiplayer service must own purchases, validate equipped inventory and sign/commit match rewards in its database.
 
 Hold the Sketch is authoritative Match state, driven by fixed ticks. Occupancy, score, rotation and winner are exposed through MatchInfo; the renderer only visualizes them. Bots reach zones through their existing waypoint and command layers. Future snapshots need objective fields plus objective stats; they require no client authority over scoring.
+
+## Character presentation layer
+
+`sim/body.ts` builds the authoritative skeleton, which is the source of hitboxes and lag-compensation rewinds.
+`render/anim/StickAnim` takes it as a target and produces the pose that is actually drawn:
+
+```
+sim skeleton ─► locomotion (planted feet, pelvis, lean) ─► aim/actions (weapon hold, recoil, reload, melee)
+            ─► IK + secondary (two-bone IK, reach, hit springs, headband) ─► render skeleton
+```
+
+The render skeleton uses the sim's joint names, so wounds, ragdolls and effects attach to what players see. Nothing
+from this layer flows back into the sim. See `docs/STICKMAN_V2.md` for tuning and the `?animdebug` tools.

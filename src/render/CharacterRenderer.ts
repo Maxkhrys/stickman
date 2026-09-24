@@ -178,9 +178,9 @@ export class CharacterRenderer {
     const guns = buildTpGuns();
     const gunMat = sandMaterial(new THREE.MeshToonMaterial({ color: 0xffffff, gradientMap: toonGradient(), vertexColors: true }));
     const defs: [PrimId, THREE.BufferGeometry, THREE.Material, number][] = [
-      ['sphere', new THREE.SphereGeometry(1, 12, 9), toonMat(), 26],
+      ['sphere', new THREE.SphereGeometry(1, 10, 8), toonMat(), 26],
       ['head', new THREE.SphereGeometry(1, 24, 16), toonMat(), 1],
-      ['cyl', new THREE.CylinderGeometry(1, 1, 1, 10), toonMat(), 24],
+      ['cyl', new THREE.CylinderGeometry(1, 1, 1, 9, 1, true), toonMat(), 24],
       ['torus', new THREE.TorusGeometry(1, 0.2, 6, 20), toonMat(), 1],
       ['gun_ar', guns.ar, gunMat, 1],
       ['gun_sniper', guns.sniper, gunMat, 1],

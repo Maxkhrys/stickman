@@ -157,7 +157,7 @@ export function buildMapMesh(map: MapDef): THREE.Group {
   group.add(buildContactShadows(map));
 
   // ---- pencils ----
-  for (const p of map.props) group.add(buildPencil(p.x, p.z, p.h, p.r, p.color));
+  for (const p of map.props) group.add(buildPencil(p.x, p.z, p.h, p.r, notebookColor(c.set(p.color)).getHex()));
 
   // ---- ink splats on the floor (instanced, one draw call) ----
   const splatColors = [0xff4f9a, 0xff4f9a, 0xffd23f, 0xffd23f, 0x22c6e0, 0x1b1b24];

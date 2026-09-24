@@ -180,28 +180,31 @@ export function makeCloudTexture(): THREE.Texture {
 }
 
 export function makeFlashTexture(): THREE.Texture {
-  const s = 64;
+  // doodled yellow star burst with an ink outline (concept muzzle flash)
+  const s = 128;
   const c = document.createElement('canvas');
   c.width = c.height = s;
   const g = c.getContext('2d')!;
-  const grd = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
-  grd.addColorStop(0, 'rgba(255,255,230,1)');
-  grd.addColorStop(0.25, 'rgba(255,220,120,0.95)');
-  grd.addColorStop(0.6, 'rgba(255,150,40,0.35)');
-  grd.addColorStop(1, 'rgba(255,120,0,0)');
-  g.fillStyle = grd;
-  g.fillRect(0, 0, s, s);
-  // star spikes
-  g.globalCompositeOperation = 'lighter';
-  g.strokeStyle = 'rgba(255,240,180,0.9)';
-  g.lineWidth = 3;
-  for (let i = 0; i < 6; i++) {
-    const a = (i / 6) * Math.PI * 2;
+  const m = s / 2;
+  const star = (ro: number, ri: number) => {
     g.beginPath();
-    g.moveTo(s / 2, s / 2);
-    g.lineTo(s / 2 + Math.cos(a) * s * 0.48, s / 2 + Math.sin(a) * s * 0.48);
-    g.stroke();
-  }
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2 - Math.PI / 2;
+      const r = i % 2 ? ri : ro * (i % 4 ? 0.8 : 1);
+      g.lineTo(m + Math.cos(a) * r, m + Math.sin(a) * r);
+    }
+    g.closePath();
+  };
+  g.lineJoin = 'round';
+  star(58, 24);
+  g.fillStyle = '#ffd23f';
+  g.fill();
+  g.lineWidth = 5;
+  g.strokeStyle = '#1b1b24';
+  g.stroke();
+  star(30, 13);
+  g.fillStyle = '#fff6c8';
+  g.fill();
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
@@ -250,4 +253,132 @@ export function makeSmokeTexture(): THREE.Texture {
   g.fillStyle = grd;
   g.fillRect(0, 0, s, s);
   return new THREE.CanvasTexture(c);
+}
+
+/**
+ * Marker hatch coverage (red channel = ink coverage, 0 = bare paper). Dense diagonal marker passes with
+ * gaps and overlaps, like the concept's coloured crates: colour laid on paper in visible strokes.
+ */
+export function makeMarkerHatchTexture(): THREE.Texture {
+  const s = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = s;
+  const g = c.getContext('2d')!;
+  g.fillStyle = 'rgb(150,0,0)';
+  g.fillRect(0, 0, s, s);
+  g.lineCap = 'round';
+  for (let pass = 0; pass < 2; pass++) {
+    for (let i = -s; i < s * 2; i += 11) {
+      const j = (Math.random() - 0.5) * 4;
+      g.strokeStyle = `rgb(${pass ? 255 : 235 + Math.random() * 20},0,0)`;
+      g.lineWidth = 5 + Math.random() * 3;
+      g.beginPath();
+      // wrap-safe: every stroke also drawn shifted by one tile
+      for (const o of [-s, 0, s]) {
+        g.moveTo(i + j + o + pass * 5, 0);
+        g.lineTo(i + j + o + pass * 5 + s, s);
+      }
+      g.stroke();
+    }
+  }
+  // a few bare-paper gaps between passes
+  g.strokeStyle = 'rgb(40,0,0)';
+  g.lineWidth = 1.2;
+  for (let i = 0; i < s * 2; i += 23) {
+    g.beginPath();
+    for (const o of [-s, 0, s]) { g.moveTo(i + o, 0); g.lineTo(i + o + s, s); }
+    g.stroke();
+  }
+  const t = canvasTex(c);
+  t.colorSpace = THREE.NoColorSpace;
+  return t;
+}
+
+/** Hand-lettered wall note with an optional arrow, black marker on transparent. */
+export function makeWallNoteTexture(lines: string[], color = '#1b1b24', arrow: 'down' | 'right' | 'none' = 'none'): THREE.Texture {
+  const W = 512, H = 256;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d')!;
+  g.fillStyle = color;
+  g.strokeStyle = color;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  const fs = lines.length > 2 ? 58 : 72;
+  g.font = `900 ${fs}px "Permanent Marker", "Luckiest Guy", "Comic Sans MS", cursive`;
+  const top = H / 2 - ((lines.length - 1) * fs * 0.95) / 2 - (arrow === 'down' ? 30 : 0);
+  lines.forEach((l, i) => {
+    g.save();
+    g.translate(W / 2 - (arrow === 'right' ? 50 : 0), top + i * fs * 0.95);
+    g.rotate(-0.04 + i * 0.02);
+    g.fillText(l, 0, 0);
+    g.restore();
+  });
+  g.lineWidth = 7;
+  g.lineCap = g.lineJoin = 'round';
+  g.beginPath();
+  if (arrow === 'down') {
+    const y0 = top + lines.length * fs * 0.95 - 20;
+    g.moveTo(W / 2 - 10, y0); g.quadraticCurveTo(W / 2 + 25, y0 + 30, W / 2, H - 14);
+    g.moveTo(W / 2 - 24, H - 40); g.lineTo(W / 2, H - 12); g.lineTo(W / 2 + 22, H - 42);
+  } else if (arrow === 'right') {
+    g.moveTo(W - 120, H / 2 + 10); g.quadraticCurveTo(W - 70, H / 2 - 20, W - 18, H / 2);
+    g.moveTo(W - 50, H / 2 - 30); g.lineTo(W - 16, H / 2); g.lineTo(W - 52, H / 2 + 22);
+  }
+  g.stroke();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/** Yellow smiley doodle sun with wobbly rays. */
+export function makeSunTexture(): THREE.Texture {
+  const s = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = s;
+  const g = c.getContext('2d')!;
+  const m = s / 2;
+  g.lineCap = g.lineJoin = 'round';
+  g.strokeStyle = '#1b1b24';
+  g.lineWidth = 6;
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2 + 0.1;
+    g.beginPath();
+    g.moveTo(m + Math.cos(a) * 70, m + Math.sin(a) * 70);
+    g.lineTo(m + Math.cos(a + 0.05) * 112, m + Math.sin(a + 0.05) * 112);
+    g.stroke();
+  }
+  g.fillStyle = '#ffd23f';
+  g.beginPath();
+  g.arc(m, m, 58, 0, Math.PI * 2);
+  g.fill();
+  // hatch shading on the sun
+  g.save();
+  g.clip();
+  g.strokeStyle = 'rgba(230,150,20,0.55)';
+  g.lineWidth = 3;
+  for (let i = -s; i < s; i += 10) { g.beginPath(); g.moveTo(i, 0); g.lineTo(i + s, s); g.stroke(); }
+  g.restore();
+  g.lineWidth = 6;
+  g.beginPath(); g.arc(m, m, 58, 0, Math.PI * 2); g.stroke();
+  g.fillStyle = '#1b1b24';
+  g.beginPath(); g.arc(m - 20, m - 12, 6, 0, 7); g.arc(m + 20, m - 12, 6, 0, 7); g.fill();
+  g.beginPath(); g.arc(m, m + 4, 26, 0.3, Math.PI - 0.3); g.stroke();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/** Hatched pencil-body stripes (sRGB colour texture multiplied by the body colour). */
+export function makePencilHatchTexture(): THREE.Texture {
+  const s = 128;
+  const c = document.createElement('canvas');
+  c.width = c.height = s;
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#ffffff';
+  g.fillRect(0, 0, s, s);
+  g.strokeStyle = 'rgba(150,90,0,0.45)';
+  g.lineWidth = 3;
+  for (let i = -s; i < s * 2; i += 9) { g.beginPath(); g.moveTo(i, 0); g.lineTo(i + s * 0.6, s); g.stroke(); }
+  return canvasTex(c);
 }

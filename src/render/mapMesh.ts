@@ -8,12 +8,16 @@ import {
   makeGraphPaperTexture,
   makeHatchTexture,
   makeLabelTexture,
+  makeMarkerHatchTexture,
+  makePencilHatchTexture,
+  makeSunTexture,
+  makeWallNoteTexture,
   makeRuledTexture,
   makeSplatTexture,
 } from './textures';
 
 const TILE = 2; // metres per texture tile
-type Bucket = 0 | 1 | 2; // 0 = graph paper (tops), 1 = hatch (sides), 2 = ruled (big walls)
+type Bucket = 0 | 1 | 2 | 3; // 0 = graph paper (tops), 1 = hatch (sides), 2 = ruled (big walls), 3 = marker hatch (coloured solids)
 
 class GeoBuilder {
   pos: number[] = [];
@@ -50,7 +54,7 @@ function notebookColor(c: THREE.Color): THREE.Color {
 
 export function buildMapMesh(map: MapDef): THREE.Group {
   const group = new THREE.Group();
-  const buckets = [new GeoBuilder(), new GeoBuilder(), new GeoBuilder()];
+  const buckets = [new GeoBuilder(), new GeoBuilder(), new GeoBuilder(), new GeoBuilder()];
   const lines: number[] = [];
   const c = new THREE.Color();
 
@@ -61,9 +65,12 @@ export function buildMapMesh(map: MapDef): THREE.Group {
   };
 
   const quad = (p0: number[], p1: number[], p2: number[], p3: number[], n: number[], color: number, uvs: number[][], bucket: Bucket, uvScale = TILE) => {
+    notebookColor(c.set(color));
+    c.getHSL(_hsl, THREE.SRGBColorSpace);
+    // coloured solids are marker strokes laid on paper, not flat fills
+    if (_hsl.s > 0.3 && _hsl.l < 0.8 && bucket !== 2) bucket = 3;
     const g = buckets[bucket];
     const base = g.pos.length / 3;
-    notebookColor(c.set(color));
     // pastel-ise so paper texture still reads through, but keep colours loud
     const s = shade(n[0], n[1], n[2]);
     for (const [i, p] of [p0, p1, p2, p3].entries()) {
@@ -138,9 +145,10 @@ export function buildMapMesh(map: MapDef): THREE.Group {
     [[bd.minX - m, bd.maxZ + m], [bd.maxX + m, bd.maxZ + m], [bd.maxX + m, bd.minZ - m], [bd.minX - m, bd.minZ - m]], 0, 4,
   );
 
-  const texes = [makeGraphPaperTexture(), makeHatchTexture(), makeRuledTexture()];
+  const texes = [makeGraphPaperTexture(), makeHatchTexture(), makeRuledTexture(), makeMarkerHatchTexture()];
   buckets.forEach((b, i) => {
-    const mesh = new THREE.Mesh(b.build(), new THREE.MeshBasicMaterial({ map: texes[i], vertexColors: true }));
+    if (!b.pos.length) return;
+    const mesh = new THREE.Mesh(b.build(), i === 3 ? markerHatchMaterial(texes[3]) : new THREE.MeshBasicMaterial({ map: texes[i], vertexColors: true }));
     mesh.matrixAutoUpdate = false;
     group.add(mesh);
   });
@@ -202,6 +210,15 @@ export function buildMapMesh(map: MapDef): THREE.Group {
     group.add(r);
   }
 
+  // ---- doodle sun ----
+  const sun = new THREE.Sprite(new THREE.SpriteMaterial({ map: makeSunTexture(), fog: false }));
+  sun.position.set(bd.maxX + 30, 34, bd.minZ - 20);
+  sun.scale.set(16, 16, 1);
+  group.add(sun);
+
+  // ---- hand-lettered notes on the big notebook walls (a few, high and to the sides of the lanes) ----
+  group.add(buildWallNotes(map));
+
   for (const l of map.labels ?? []) {
     const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: makeLabelTexture(l.text), depthWrite: false }));
     sp.position.set(l.pos.x, l.pos.y, l.pos.z);
@@ -210,6 +227,8 @@ export function buildMapMesh(map: MapDef): THREE.Group {
   }
   return group;
 }
+
+let pencilHatch: THREE.Texture | undefined;
 
 /** Giant pencil standing tip-up: eraser, ferrule band, hex body, wood cone, graphite tip, ink outline. */
 function buildPencil(x: number, z: number, h: number, r: number, color: number): THREE.Group {
@@ -228,7 +247,7 @@ function buildPencil(x: number, z: number, h: number, r: number, color: number):
   };
   add(new THREE.CylinderGeometry(r * 0.95, r * 0.95, eraserH, 16), lam(0xff6fae), eraserH / 2);
   add(new THREE.CylinderGeometry(r, r, bandH, 16), lam(0xb8bcc6), eraserH + bandH / 2);
-  add(new THREE.CylinderGeometry(r, r, bodyH, 6), lam(color), eraserH + bandH + bodyH / 2);
+  add(new THREE.CylinderGeometry(r, r, bodyH, 6), new THREE.MeshLambertMaterial({ color, map: pencilHatch ??= makePencilHatchTexture() }), eraserH + bandH + bodyH / 2);
   add(new THREE.ConeGeometry(r, tipH * 0.75, 6), lam(0xf1cf9a), h - tipH + (tipH * 0.75) / 2);
   const lead = new THREE.Mesh(new THREE.ConeGeometry(r * 0.28, tipH * 0.28, 6), lam(0x333340));
   lead.position.y = h - (tipH * 0.28) / 2 + 0.02;
@@ -294,4 +313,60 @@ function buildContactShadows(map: MapDef): THREE.Mesh {
   mesh.matrixAutoUpdate = false;
   mesh.renderOrder = -1;
   return mesh;
+}
+
+/** Coloured solids: mix paper and the face colour by the marker-hatch coverage texture. */
+function markerHatchMaterial(tex: THREE.Texture): THREE.Material {
+  const m = new THREE.MeshBasicMaterial({ map: tex, vertexColors: true });
+  m.onBeforeCompile = (sh) => {
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <map_fragment>', 'float hatchCov = texture2D( map, vMapUv ).r;')
+      .replace('#include <color_fragment>', 'diffuseColor.rgb = mix( vec3( 0.92, 0.89, 0.83 ), vColor, hatchCov );');
+  };
+  return m;
+}
+
+const NOTES: { lines: string[]; arrow?: 'down' | 'right' | 'none'; color?: string }[] = [
+  { lines: ['PRACTICE', 'AIM', 'IMPROVE', 'REPEAT'] },
+  { lines: ['GOOD SHOTS', 'ONLY!'], arrow: 'down', color: '#e8327f' },
+  { lines: ['MOVE', 'SHOOT', 'LEARN!'] },
+  { lines: ['AIM', 'HIGHER!'], arrow: 'down' },
+  { lines: ['KEEP', 'GOING!'], arrow: 'right', color: '#e8327f' },
+];
+
+/** Notes on the inner faces of the tall paper walls: a small set, placed above head height. */
+function buildWallNotes(map: MapDef): THREE.Group {
+  const g = new THREE.Group();
+  const bd = map.bounds, cx = (bd.minX + bd.maxX) / 2, cz = (bd.minZ + bd.maxZ) / 2;
+  const walls = map.boxes.filter((b) => b.max.y - b.min.y >= 5 && b.color === 0xf3efe6);
+  let k = 0;
+  for (const b of walls) {
+    if (k >= NOTES.length) break;
+    const wx = b.max.x - b.min.x, wz = b.max.z - b.min.z;
+    const alongX = wx > wz;
+    const len = alongX ? wx : wz;
+    if (len < 12) continue;
+    // face toward the arena centre
+    let px: number, pz: number, ry: number;
+    if (alongX) {
+      const inward = cz > (b.min.z + b.max.z) / 2 ? 1 : -1;
+      pz = (inward > 0 ? b.max.z : b.min.z) + inward * 0.03;
+      px = (b.min.x + b.max.x) / 2 + (k % 2 ? 0.22 : -0.22) * len;
+      ry = inward > 0 ? 0 : Math.PI;
+    } else {
+      const inward = cx > (b.min.x + b.max.x) / 2 ? 1 : -1;
+      px = (inward > 0 ? b.max.x : b.min.x) + inward * 0.03;
+      pz = (b.min.z + b.max.z) / 2 + (k % 2 ? 0.25 : -0.25) * len;
+      ry = inward > 0 ? Math.PI / 2 : -Math.PI / 2;
+    }
+    const n = NOTES[k++];
+    const mesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(6, 3),
+      new THREE.MeshBasicMaterial({ map: makeWallNoteTexture(n.lines, n.color, n.arrow ?? 'none'), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }),
+    );
+    mesh.position.set(px, Math.min(b.max.y - 1.7, 4.2), pz);
+    mesh.rotation.y = ry;
+    g.add(mesh);
+  }
+  return g;
 }

@@ -65,8 +65,8 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--paper)
 
 .panel { position: absolute; font-family: var(--hand); }
 .hp { left: 24px; bottom: 22px; width: 300px; }
-.hp .lbl { font-size: 20px; transform: rotate(-3deg); display: inline-block; }
-.hp .num { font-size: 36px; margin-left: 10px; -webkit-text-stroke: 1px var(--ink); color: #fff; paint-order: stroke fill; }
+.hp .lbl { font-size: 30px; transform: rotate(-3deg); display: inline-block; }
+.hp .num { font-size: 40px; margin-left: 10px; color: var(--ink); }
 .bar { height: 16px; border: 3px solid var(--ink); border-radius: 4px 9px 5px 8px; background: #fff; overflow: hidden; margin-top: 2px; }
 .bar > div { height: 100%; background: repeating-linear-gradient(-45deg, var(--pink), var(--pink) 8px, #ff6fae 8px, #ff6fae 14px); transition: width 0.12s; }
 .bar.low > div { background: repeating-linear-gradient(-45deg, #ff3355, #ff3355 8px, #ff6677 8px, #ff6677 14px); }
@@ -75,7 +75,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--paper)
 .protect .pbar > div { height: 100%; background: var(--yellow); }
 
 .ammo { right: 26px; bottom: 18px; text-align: right; }
-.ammo .mag { font-size: 58px; color: #fff; -webkit-text-stroke: 2px var(--ink); paint-order: stroke fill; line-height: 1; }
+.ammo .mag { font-size: 64px; color: var(--ink); line-height: 1; }
 .ammo .mag.empty { color: var(--pink); }
 .ammo .res { font-size: 24px; opacity: 0.8; }
 .ammo .wname { font-size: 19px; }

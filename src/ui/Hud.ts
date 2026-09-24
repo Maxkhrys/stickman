@@ -27,7 +27,7 @@ export class Hud {
   private xh = el('div', 'xh', '<i class="t"></i><i class="b"></i><i class="l"></i><i class="r"></i><i class="dot"></i>');
   private hm = el('div', 'hm', '<i></i><i></i><i></i><i></i>');
   private vignette = el('div', 'vignette');
-  private hpPanel = el('div', 'panel hp', '<span class="lbl">INK</span><span class="num">100</span><div class="bar"><div></div></div><div class="protect hidden">protected<div class="pbar"><div></div></div></div>');
+  private hpPanel = el('div', 'panel hp', '<span class="lbl">HP</span><span class="num">100</span><div class="bar"><div></div></div><div class="protect hidden">protected<div class="pbar"><div></div></div></div>');
   private ammoPanel = el('div', 'panel ammo');
   private objectiveKey = '';
   private objectivePanel = el('div', 'objective-panel hidden');

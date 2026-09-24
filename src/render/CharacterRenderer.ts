@@ -12,7 +12,8 @@ import { toonGradient } from './vm/kit';
 import { SAND, graphiteGrainMap, sandMaterial } from './sand';
 import { STICK, StickAnim, type AnimView } from './anim/StickAnimator';
 import { AnimDebug } from './anim/AnimDebug';
-import { markerGradient, markerStrokeMap, wobbleHull } from './marker';
+import { markerStrokeMap, wobbleHull } from './marker';
+import { StrokeRenderer } from './stroke';
 
 // ============================================================================
 //  Instanced stick fighters. Every body part of every character goes through a
@@ -28,7 +29,11 @@ const INK = new THREE.Color(0x0e0e14);
 const WHITE = new THREE.Color(0xffffff);
 const PROTECT = new THREE.Color(0xffd23f);
 /** graphite body; a fighter's ink only tints it, the headband carries the full colour */
-const GRAPHITE = new THREE.Color(0x3a3a46);
+const GRAPHITE = new THREE.Color(0x141418);
+/** range dummies get the concept's hot-pink marker head */
+/** the concept figures carry no headband; kept behind a flag for the ink-identity experiment */
+const SHOW_HEADBAND = false;
+const DUMMY_HEAD = new THREE.Color(0xff4f9a);
 
 /** Dark granular material a fighter's body turns into when it tears or collapses. */
 export function dustColor(color: number): number {
@@ -132,6 +137,7 @@ function boneFrame(sk: Skeleton, i: number) {
 
 const tv = new THREE.Vector3();
 const tv2 = new THREE.Vector3();
+const tv4 = new THREE.Vector3();
 const tv3 = new THREE.Vector3();
 const tq = new THREE.Quaternion();
 const tq2 = new THREE.Quaternion();
@@ -172,10 +178,13 @@ export class CharacterRenderer {
   private body = new THREE.Color();
   private accent = new THREE.Color();
   private line = new THREE.Color();
+  /** the visible body: continuous marker strokes through the skeleton */
+  readonly strokes = new StrokeRenderer();
+  private strokeW = 1;
 
   constructor(private effects: Effects, maxChars = 12) {
-    // dense dry marker: limb-following streaks, restrained two-band toon shading, no highlight
-    const toonMat = () => new THREE.MeshToonMaterial({ color: 0xffffff, gradientMap: markerGradient(), map: SAND.enabled ? markerStrokeMap() : graphiteGrainMap() });
+    // flat bold ink with dry-marker streaks: no light response, so the figure reads as a drawn line, not a 3D tube
+    const toonMat = () => new THREE.MeshBasicMaterial({ color: 0xffffff, map: SAND.enabled ? markerStrokeMap() : graphiteGrainMap() });
     const lineMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.BackSide });
     const guns = buildTpGuns();
     const gunMat = sandMaterial(new THREE.MeshToonMaterial({ color: 0xffffff, gradientMap: toonGradient(), vertexColors: true }));
@@ -207,7 +216,7 @@ export class CharacterRenderer {
     );
     this.shadows.frustumCulled = false;
     this.shadows.count = 0;
-    this.group.add(this.shadows, this.debug.lines);
+    this.group.add(this.shadows, this.debug.lines, this.strokes.mesh);
   }
 
   reset() {
@@ -345,6 +354,7 @@ export class CharacterRenderer {
     this.pass++;
     camera.getWorldPosition(this.camPos);
     dbg.begin();
+    this.strokes.begin(this.camPos);
     let shadowN = 0;
     for (const f of fighters) {
       const c = this.stateOf(f);
@@ -367,17 +377,16 @@ export class CharacterRenderer {
           c.deathPulse = c.deadT;
           const source = c.rp[c.headPop ? JI.head : JI.chest];
           const point = source.clone().lerp(c.rp[JI.pelvis], c.deadT / SAND.collapseTime * 0.65);
-          if (c.deathPulse < 0.2) this.effects.sandPile(c.rp[JI.pelvis], dust, c.deathDir);
-          this.effects.sandBurst(point, dust, 14, 2.6, c.deathDir, SAND.pileLife, 1.7);
+          // the drawing comes apart: a few ink/graphite flecks peel off the breaking strokes
+          this.effects.burst(point, 0x14141c, 5, 2.2, 0.05, 0.45, 1);
         }
         if (!c.burst && c.deadT > SAND.collapseTime) {
           c.burst = true;
           const center = c.rp[JI.chest].clone().lerp(c.rp[JI.pelvis], 0.5);
-          if (SAND.enabled) this.effects.sandBurst(center, dust, 34, 2.4, c.deathDir, SAND.pileLife, 1.7);
-          else {
-            this.effects.burst(center, f.color, 26, 5.5, 0.09, 0.7, 1);
-            this.effects.burst(center, 0x14141c, 24, 6, 0.06, 0.6, 1);
-          }
+          // scribbled residue: a restrained ink burst plus a smudge left on the paper
+          this.effects.burst(center, 0x14141c, 16, 3.5, 0.06, 0.55, 1);
+          this.effects.burst(center, f.kind === 'dummy' ? 0xff4f9a : f.color, 8, 3, 0.07, 0.5, 1);
+          this.effects.markerSmear(center.x, c.rp[JI.pelvis].y - 0.05, center.z, c.deathDir.x || 1, c.deathDir.z, 1.1, 0.5);
         }
         if (c.burst) continue;
         c.sk = c.anim.pose;
@@ -417,6 +426,8 @@ export class CharacterRenderer {
       // line thickness grows with distance so the figure reads as a drawn stroke far away
       const d = this.camPos.distanceTo(V(c.sk.pelvis, tv));
       this.lineT = Math.min(0.05, Math.max(0.013, d * 0.0024));
+      // strokes keep a readable screen weight at range (a marker line, not a vanishing tube)
+      this.strokeW = Math.max(1, Math.min(2.4, d / 16));
       const protectedPulse = f.spawnProtect > 0 ? 0.5 + 0.5 * Math.sin(this.time * 14) : 0;
       this.line.copy(INK).lerp(PROTECT, protectedPulse);
       this.structure = SAND.enabled ? c.dead ? Math.max(0.06, 1 - Math.max(0, c.deadT - 0.17) / (SAND.collapseTime - 0.17)) : 1 - c.forming / 0.28 * 0.72 : 1;
@@ -431,6 +442,7 @@ export class CharacterRenderer {
       }
     }
     for (const b of this.batches.values()) b.commit();
+    this.strokes.end();
     this.shadows.count = shadowN;
     this.shadows.instanceMatrix.needsUpdate = true;
     this.shadowN = shadowN;
@@ -469,39 +481,27 @@ export class CharacterRenderer {
     const mid = c.dead ? tv3.copy(jp.pelvis).lerp(jp.chest, 0.5) : c.anim.spineMid;
     const S = STICK;
 
-    // spine: pelvis -> mid -> chest -> neck, one continuous stroke
-    this.limb(jp.pelvis, mid, S.spineR, body, line);
-    this.limb(mid, jp.chest, S.spineR, body, line);
-    this.limb(jp.chest, jp.head, S.spineR * 0.8, body, line);
-    this.ball(jp.pelvis, S.spineR, body, line);
-    this.ball(mid, S.spineR, body, line);
-    this.ball(jp.chest, S.spineR, body, line);
-    // head
-    const qH = c.dead ? tq2.setFromUnitVectors(Y, V(sk.headUp, tv)) : tq2.copy(c.anim.headQuat);
-    this.emit('head', jp.head, qH, ts.set(S.headR, S.headR, S.headR), body, 'uniform', line);
-    if (!c.dead || !c.headPop) this.headband(c, f.id, jp.head, qH, accent, line);
-    // arms: clavicle, upper arm, forearm, hand
+    // Drawn stickman: every body part is ONE marker stroke through the skeleton, no joint balls.
+    const k = this.strokeW, seed = f.id * 17;
+    const brk = c.dead ? Math.min(1, Math.max(0, c.deadT - 0.1) / 0.9) : 0;
+    const st = this.strokes;
+    const neck = tv4.copy(jp.chest).lerp(jp.head, 0.55);
+    st.chain([jp.pelvis, mid, jp.chest, neck], 0.052 * k, 0.046 * k, body, seed, brk);
     for (const side of [0, 1]) {
       const sh = side ? jp.rShoulder : jp.lShoulder, el = side ? jp.rElbow : jp.lElbow, ha = side ? jp.rHand : jp.lHand;
-      this.limb(jp.chest, sh, S.armR, body, line);
-      this.ball(sh, S.armR, body, line);
-      this.limb(sh, el, S.armR, body, line);
-      this.ball(el, S.armR, body, line);
-      this.limb(el, ha, S.armR, body, line);
-      this.ball(ha, S.handR, body, line);
-    }
-    // legs: hip, thigh, shin, foot
-    for (const side of [0, 1]) {
+      st.chain([jp.chest, sh, el, ha], 0.045 * k, 0.038 * k, body, seed + 1 + side, brk);
       const hip = side ? jp.rHip : jp.lHip, kn = side ? jp.rKnee : jp.lKnee, an = side ? jp.rAnkle : jp.lAnkle, to = side ? jp.rToe : jp.lToe;
-      this.limb(jp.pelvis, hip, S.legR, body, line);
-      this.ball(hip, S.legR, body, line);
-      this.limb(hip, kn, S.legR, body, line);
-      this.ball(kn, S.legR, body, line);
-      this.limb(kn, an, S.legR * 0.94, body, line);
-      this.ball(an, S.legR * 0.94, body, line);
-      this.limb(an, to, S.footR, body, line);
-      this.ball(to, S.footR, body, line);
+      st.chain([jp.pelvis, hip, kn, an], 0.05 * k, 0.043 * k, body, seed + 3 + side, brk);
+      st.chain([an, to], 0.043 * k, 0.036 * k, body, seed + 5 + side, brk);
     }
+    // head: a filled marker circle (pink with an ink rim on range dummies)
+    if (!c.dead || !c.headPop) {
+      const hr = S.headR * 0.9 * (1 - 0.4 * brk);
+      if (f.kind === 'dummy') st.disc(jp.head, hr, tc.copy(DUMMY_HEAD), seed + 9, body);
+      else st.disc(jp.head, hr, body, seed + 9);
+    }
+    const qH = c.dead ? tq2.setFromUnitVectors(Y, V(sk.headUp, tv)) : tq2.copy(c.anim.headQuat);
+    if (SHOW_HEADBAND && (!c.dead || !c.headPop)) this.headband(c, f.id, jp.head, qH, accent, line);
     // third-person weapon in the hands
     if (!c.dead && c.anim.showGun) {
       const w = f.weapons[f.cur].id as WeaponId;

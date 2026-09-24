@@ -144,7 +144,7 @@ export class Effects {
 
     const ft = makeFlashTexture();
     for (let i = 0; i < 10; i++) {
-      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: ft, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: ft, depthWrite: false, transparent: true }));
       s.visible = false;
       this.flashes.push({ s, life: 0 });
       this.group.add(s);

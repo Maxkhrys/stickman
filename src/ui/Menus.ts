@@ -304,6 +304,20 @@ export class Menus {
         this.cb.settingsChanged();
       })),
     );
+    card.appendChild(
+      this.row('Centre dot', this.seg<string>([['0', 'Off'], ['3', 'Small'], ['4', 'Medium'], ['6', 'Large']], String(s.crosshairDot), (v) => {
+        s.crosshairDot = Number(v);
+        saveSettings(s);
+        this.cb.settingsChanged();
+      })),
+    );
+    card.appendChild(
+      this.row('Camera smoothing', this.seg<string>([['0', 'Rigid'], ['1', 'Smooth'], ['2', 'Floaty']], String(s.cameraSmoothing), (v) => {
+        s.cameraSmoothing = Number(v);
+        saveSettings(s);
+        this.cb.settingsChanged();
+      })),
+    );
 
     const kh = document.createElement('h2');
     kh.textContent = 'Keybinds';

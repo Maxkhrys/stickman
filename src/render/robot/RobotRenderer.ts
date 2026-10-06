@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { MOVE } from '../../config/movement';
-import { MODEL_FOR, WEAPON_MODELS, type V3 } from '../../config/weaponModels';
+import { MODEL_FOR, WEAPON_MODELS, adsBlend, type V3 } from '../../config/weaponModels';
 import { WEAPONS } from '../../config/weapons';
 import { buildSkeleton, createSkeleton, type Skeleton } from '../../sim/body';
 import { eyePos, kickAt, type Fighter } from '../../sim/fighter';
@@ -219,6 +219,8 @@ function rotateWorld(b: THREE.Object3D, r: THREE.Quaternion) {
   setWorldQuat(b, tq.premultiply(tq3));
 }
 
+const rs0 = new THREE.Vector3(), rs1 = new THREE.Vector3(), rs2 = new THREE.Vector3(), rs4 = new THREE.Vector3(), rs5 = new THREE.Vector3(), rs6 = new THREE.Vector3(), rs7 = new THREE.Vector3(), rs8 = new THREE.Vector3(), rs9 = new THREE.Vector3();
+const rs3 = new THREE.Quaternion();
 const ia = new THREE.Vector3(), ib = new THREE.Vector3(), ic = new THREE.Vector3(), it = new THREE.Vector3();
 const ie = new THREE.Vector3(), bend = new THREE.Vector3(), nrm = new THREE.Vector3();
 const sw = new THREE.Quaternion();
@@ -342,6 +344,19 @@ interface RobotState {
   /** hard (standing) landing timer, -1 = none */
   hardT: number;
   pencil: THREE.Mesh | null;
+  /** slow-moving chest position in the character frame (the gun follows the fast part of the chest's motion) */
+  chestRef: THREE.Vector3;
+  chestInit: boolean;
+  /** first-person gun inertia: the gun trails fast turns on a damped spring (yaw, pitch and their speeds) */
+  lagYaw: number;
+  lagPitch: number;
+  lagVYaw: number;
+  lagVPitch: number;
+  /** arm lengths shoulder -> hand (m), left and right; measured once */
+  armLen: [number, number] | null;
+  /** chest twist (yaw) and lean (pitch) the reach solver used last frame, eased so the torso never jitters */
+  reachYaw: number;
+  reachLean: number;
   dead: boolean;
   deadT: number;
   deathDir: THREE.Vector3;
@@ -360,8 +375,17 @@ export interface RobotViewOptions {
   localId: number;
   viewYaw: number;
   viewPitch: number;
+  /** how fast the local player is turning the view (rad/s); first-person gun sway */
+  lookYawRate?: number;
+  lookPitchRate?: number;
 }
 
+/** the gun rides the chest's motion above this frequency's worth of smoothing (seconds), and no further than this (m) */
+const SWAY_SMOOTH = 0.3;
+const SWAY_MAX = 0.07;
+/** reach solver limits: chest twist (rad), chest lean (rad) and the arm length fraction a hand may be asked for */
+const REACH_YAW = 0.62;
+const REACH_LEAN = 0.34;
 const HURT_TIME = 0.42;
 /** a headshot snaps the head back for longer */
 const HEAD_HURT_TIME = 0.66;
@@ -459,7 +483,7 @@ export class RobotRenderer {
       rest: bones.map((x) => x.quaternion.clone()),
       hipRest: b.Hips.position.clone(),
       phase: 0, facing: f.yaw, guns: {}, gunKey: null,
-      wasGround: true, landT: 9, airT: 0, hurtT: 0, hurtX: 0, hurtZ: 0, rollT: -1, rollDir: 0, rollKind: 'dash', hitClip: 'hitFront', hurtDur: 0.42, rollClip: 'roll', rollSide: false, slideT: 0, slideExitT: -1, meleeT: -1, meleeClip: 'meleeLight', meleeSeen: -99, meleeFlip: false, hardT: -1, pencil: null,
+      wasGround: true, landT: 9, airT: 0, hurtT: 0, hurtX: 0, hurtZ: 0, rollT: -1, rollDir: 0, rollKind: 'dash', hitClip: 'hitFront', hurtDur: 0.42, rollClip: 'roll', rollSide: false, slideT: 0, slideExitT: -1, meleeT: -1, meleeClip: 'meleeLight', meleeSeen: -99, meleeFlip: false, hardT: -1, pencil: null, chestRef: new THREE.Vector3(), chestInit: false, lagYaw: 0, lagPitch: 0, lagVYaw: 0, lagVPitch: 0, armLen: null, reachYaw: 0, reachLean: 0,
       dead: false, deadT: 0, deathDir: new THREE.Vector3(), lastShot: -99,
       sk: createSkeleton(), head: new THREE.Vector3(), visibleLast: true, lod: false,
     };
@@ -555,6 +579,82 @@ export class RobotRenderer {
     this.shadows.count = shadowN;
     this.shadows.instanceMatrix.needsUpdate = true;
     for (const [id, c] of this.chars) if (!fighters.some((f) => f.id === id)) { this.group.remove(c.root); for (const g of Object.values(c.guns)) if (g) this.group.remove(g); this.chars.delete(id); }
+  }
+
+  /**
+   * Twist and lean the chest until both hands can reach the gun. The grip and support sockets sit where the aim
+   * frame puts them (rifle at the shoulder, arm's length ahead of the face), which the arms cannot reach from an
+   * upright torso, so the support hand used to hang in the air while the gun floated. Shoulders come forward with a
+   * bladed twist first, then a lean. The result is eased over frames so it never jitters.
+   */
+  private reachSolve(c: RobotState, grip: THREE.Vector3, support: THREE.Vector3 | null, allowShift: boolean) {
+    const B = c.b;
+    if (!c.armLen) {
+      const len = (a: THREE.Bone, b: THREE.Bone, h: THREE.Bone) => a.getWorldPosition(rs0).distanceTo(b.getWorldPosition(rs1)) + b.getWorldPosition(rs1).distanceTo(h.getWorldPosition(rs2));
+      c.armLen = [len(B.LeftArm, B.LeftForeArm, B.LeftHand), len(B.RightArm, B.RightForeArm, B.RightHand)];
+    }
+    const [lenL, lenR] = c.armLen;
+    const chain = [B.Spine, B.Spine1, B.Spine2];
+    const turn = (axis: THREE.Vector3, ang: number) => {
+      for (const bone of chain) {
+        rs3.setFromAxisAngle(axis, ang / 3);
+        rotateWorld(bone, rs3);
+        bone.updateWorldMatrix(false, true);
+      }
+    };
+    const need = () => {
+      B.LeftArm.getWorldPosition(rs0);
+      B.RightArm.getWorldPosition(rs1);
+      return [support ? rs0.distanceTo(support) - lenL * 0.96 : -1, rs1.distanceTo(grip) - lenR * 0.96] as const;
+    };
+    let yaw = 0, lean = 0;
+    const rightAxis = rs4.set(Math.cos(c.facing), 0, -Math.sin(c.facing));
+    for (let it = 0; it < 6; it++) {
+      const [nl, nr] = need();
+      const worst = Math.max(nl, nr);
+      if (worst < 0.004) break;
+      const target = nl >= nr ? support! : grip;
+      const shoulder = (nl >= nr ? B.LeftArm : B.RightArm).getWorldPosition(rs0);
+      rs5.subVectors(target, shoulder).normalize();
+      // twist about the vertical through the chest
+      B.Spine1.getWorldPosition(rs6);
+      rs7.subVectors(shoulder, rs6);
+      rs7.y = 0;
+      rs8.set(rs7.z, 0, -rs7.x); // up x r
+      const rateYaw = rs8.dot(rs5);
+      if (Math.abs(rateYaw) > 0.04 && Math.abs(yaw) < REACH_YAW) {
+        const d = Math.max(-0.3, Math.min(0.3, worst / rateYaw));
+        const next = Math.max(-REACH_YAW, Math.min(REACH_YAW, yaw + d));
+        turn(rs9.set(0, 1, 0), next - yaw);
+        yaw = next;
+        continue;
+      }
+      // then lean at the waist
+      B.Spine.getWorldPosition(rs6);
+      rs7.subVectors(shoulder, rs6);
+      rs8.crossVectors(rightAxis, rs7);
+      const rateLean = rs8.dot(rs5);
+      if (Math.abs(rateLean) < 0.04) break;
+      const d = Math.max(-0.25, Math.min(0.25, worst / rateLean));
+      const next = Math.max(-REACH_LEAN, Math.min(REACH_LEAN, lean + d));
+      if (Math.abs(next - lean) < 1e-4) break;
+      turn(rightAxis, next - lean);
+      lean = next;
+    }
+    c.reachYaw = yaw;
+    c.reachLean = lean;
+    // last resort (airborne tucks, mostly): step the whole body toward the gun a little. Never for the local
+    // first-person body, whose head is locked to the camera
+    if (allowShift) {
+      const [nl, nr] = need();
+      if (Math.max(nl, nr) > 0.012) {
+        const target = nl >= nr ? support! : grip;
+        const shoulder = (nl >= nr ? B.LeftArm : B.RightArm).getWorldPosition(rs0);
+        rs5.subVectors(target, shoulder).normalize().multiplyScalar(Math.min(Math.max(nl, nr), 0.12));
+        c.root.position.add(rs5);
+        c.root.updateMatrixWorld(true);
+      }
+    }
   }
 
   private animate(f: Fighter, c: RobotState, dt: number, alpha: number, time: number, px: number, py: number, pz: number, world: World, view: RobotViewOptions) {
@@ -829,8 +929,21 @@ export class RobotRenderer {
     eye.x = px; eye.z = pz;
     eye.y = py + height - MOVE.eyeFromTop;
     const kick = kickAt(f, time);
-    const aimYaw = yaw + f.recoilYaw + kick.yaw;
-    const aimPitch = pitch + f.recoilPitch + kick.pitch;
+    // first person: the gun trails fast turns on a damped spring and settles (aiming down sights locks it back on)
+    if (f.id === view.hideHeadOf && f.alive && view.lookYawRate !== undefined) {
+      const stepSpring = (x: number, v: number, target: number) => {
+        const w = 16, z = 0.72, acc = w * w * (target - x) - 2 * z * w * v;
+        const nv = v + acc * Math.min(dt, 0.033);
+        return [x + nv * Math.min(dt, 0.033), nv] as const;
+      };
+      const ty = Math.max(-0.09, Math.min(0.09, -(view.lookYawRate ?? 0) * 0.016));
+      const tp = Math.max(-0.07, Math.min(0.07, -(view.lookPitchRate ?? 0) * 0.016));
+      [c.lagYaw, c.lagVYaw] = stepSpring(c.lagYaw, c.lagVYaw, ty);
+      [c.lagPitch, c.lagVPitch] = stepSpring(c.lagPitch, c.lagVPitch, tp);
+    } else { c.lagYaw = c.lagPitch = c.lagVYaw = c.lagVPitch = 0; }
+    const swayAim = 1 - adsBlend(ads);
+    const aimYaw = yaw + f.recoilYaw + kick.yaw + c.lagYaw * swayAim;
+    const aimPitch = pitch + f.recoilPitch + kick.pitch + c.lagPitch * swayAim;
     let gun: THREE.Object3D | null = null;
     if (key) {
       gun = c.guns[key] ?? null;
@@ -843,6 +956,19 @@ export class RobotRenderer {
       useLod(gun, c.lod);
       this.wf = weaponFrame(eye, aimYaw, aimPitch, weapon, ads, this.wf ?? undefined)!;
       const w = this.wf;
+      // the gun rides the fast part of the chest's motion (run bob, stride twist, flinch), measured against a slow
+      // reference in the character frame, so it moves with the body and arms instead of hanging in the aim frame.
+      // Aiming down sights fades it out: the sights must stay exactly on the camera
+      c.b.Spine2.getWorldPosition(rs0);
+      c.root.worldToLocal(rs0);
+      if (!c.chestInit) { c.chestRef.copy(rs0); c.chestInit = true; }
+      c.chestRef.lerp(rs0, 1 - Math.exp(-dt / SWAY_SMOOTH));
+      const swayK = 1 - adsBlend(ads);
+      rs1.subVectors(rs0, c.chestRef).applyQuaternion(c.root.quaternion);
+      if (rs1.length() > SWAY_MAX) rs1.setLength(SWAY_MAX);
+      w.o.x += rs1.x * swayK;
+      w.o.y += rs1.y * swayK;
+      w.o.z += rs1.z * swayK;
       const mdl = WEAPON_MODELS[key];
       // presentation offsets: draw (lowered), reload (tilted), shot kick (back + up)
       const draw = def.drawTime > 0 ? Math.min(1, f.switchTimer / def.drawTime) : 0;
@@ -909,12 +1035,22 @@ export class RobotRenderer {
       const up = new THREE.Vector3(w.u.x, w.u.y, w.u.z);
       const poleR = rp.clone().multiplyScalar(0.6).addScaledVector(up, -1);
       const poleL = rp.clone().multiplyScalar(-0.4).addScaledVector(up, -1);
-      twoBoneIK(c.b.RightArm, c.b.RightForeArm, c.b.RightHand, gripTarget, poleR);
-      setWorldQuat(c.b.RightHand, tq.copy(qW).multiply(c.ch.gripRel.right));
       if (key === 'pistol') {
         // pistols: the support hand cups the trigger hand
         support = grip.clone().addScaledVector(rp, -0.045).addScaledVector(up, -0.02);
       }
+      // make both hands reachable: twist / lean the chest toward the gun (near fighters only), and where the arm is
+      // still short, take the support hand back along the gun toward the grip so it always touches the weapon
+      if (!c.lod) this.reachSolve(c, gripTarget, supportW > 0 ? support : null, f.id !== view.hideHeadOf);
+      if (supportW > 0 && c.armLen) {
+        const reach = c.armLen[0] * 0.96, dist = c.b.LeftArm.getWorldPosition(rs0).distanceTo(support);
+        if (dist > reach + 0.01) {
+          const toGrip = new THREE.Vector3().subVectors(grip, support), gl = toGrip.length();
+          if (gl > 1e-3) support = support.clone().addScaledVector(toGrip, Math.min(0.85, (dist - reach) / gl));
+        }
+      }
+      twoBoneIK(c.b.RightArm, c.b.RightForeArm, c.b.RightHand, gripTarget, poleR);
+      setWorldQuat(c.b.RightHand, tq.copy(qW).multiply(c.ch.gripRel.right));
       twoBoneIK(c.b.LeftArm, c.b.LeftForeArm, c.b.LeftHand, support, poleL, supportW);
       if (reloadP < 0 || reloadP > 0.85) setWorldQuat(c.b.LeftHand, tq.copy(qW).multiply(c.ch.gripRel.left));
       }

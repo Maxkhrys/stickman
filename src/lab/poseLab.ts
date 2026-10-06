@@ -180,6 +180,7 @@ if (view === 'fp') {
 cam.updateMatrixWorld();
 const t = Number(qs.get('t') ?? 0.4);
 const N = 96;
+const swayLo: number[][] = [], swayHi: number[][] = [];
 for (let i = 0; i < N; i++) {
   const now = (t * (i + 1)) / N;
   setups.forEach((s, k) => {
@@ -192,6 +193,34 @@ for (let i = 0; i < N; i++) {
     if (s.deadAgo !== undefined && trigger(s.deadAgo)) f.alive = false;
   });
   rr.update(t / N, fighters, 1, now, world, cam, { hideHeadOf: view === 'fp' ? idx : -1, localId: -1, viewYaw: 0, viewPitch: 0 });
+  if (qs.get('swaylog') && i >= N / 2) {
+    fighters.forEach((f, k) => {
+      const c = (rr as unknown as { chars: Map<number, { guns: Record<string, THREE.Object3D>; gunKey: string | null }> }).chars.get(f.id)!;
+      const g = c.gunKey ? c.guns[c.gunKey] : null;
+      if (!g) return;
+      const lo = (swayLo[k] ??= [1e9, 1e9, 1e9]), hi = (swayHi[k] ??= [-1e9, -1e9, -1e9]);
+      [g.position.x - f.pos.x, g.position.y, g.position.z - f.pos.z].forEach((v, j) => { lo[j] = Math.min(lo[j], v); hi[j] = Math.max(hi[j], v); });
+    });
+  }
+}
+if (qs.get('swaylog')) fighters.forEach((f, k) => console.error(`gaps sway #${k} ${f.weapons[0].id} gun position range (cm) x ${((swayHi[k][0] - swayLo[k][0]) * 100).toFixed(1)} y ${((swayHi[k][1] - swayLo[k][1]) * 100).toFixed(1)} z ${((swayHi[k][2] - swayLo[k][2]) * 100).toFixed(1)}`));
+if (qs.get('gaps')) {
+  // how far each hand is from the gun's grip / support socket (cm), per fighter
+  const { WEAPON_MODELS, MODEL_FOR } = await import('../config/weaponModels');
+  fighters.forEach((f, k) => {
+    const c = (rr as unknown as { chars: Map<number, { b: Record<string, THREE.Bone>; guns: Record<string, THREE.Object3D>; gunKey: string | null; root: THREE.Object3D }> }).chars.get(f.id)!;
+    const key = c.gunKey as keyof typeof WEAPON_MODELS | null;
+    if (!key || !c.guns[key]) { console.error(`gaps #${k} (no gun)`); return; }
+    const g = c.guns[key]; g.updateMatrixWorld(true); c.root.updateMatrixWorld(true);
+    const m = WEAPON_MODELS[key];
+    const sock = (v: number[]) => new THREE.Vector3(v[0], v[1], v[2]).applyMatrix4(g.matrixWorld);
+    const rh = c.b.RightHand.getWorldPosition(new THREE.Vector3()), lh = c.b.LeftHand.getWorldPosition(new THREE.Vector3());
+    // the support hand may hold the gun anywhere between the grip and the handguard socket
+    const A = sock(m.grip), Bp = sock(m.support), ab = Bp.clone().sub(A), tt = Math.max(0, Math.min(1, lh.clone().sub(A).dot(ab) / Math.max(1e-6, ab.lengthSq())));
+    const lineGap = lh.distanceTo(A.clone().addScaledVector(ab, tt));
+    console.error(`gaps #${k} ${f.weapons[0].id} R ${(rh.distanceTo(A) * 100).toFixed(1)} cm  L ${(lineGap * 100).toFixed(1)} cm from the gun (socket ${(lh.distanceTo(Bp) * 100).toFixed(1)})`);
+  });
+  void MODEL_FOR;
 }
 if (qs.get('dump')) {
   const names = ['Hips', 'Spine', 'Spine1', 'Spine2', 'Neck', 'Head', 'LeftUpLeg', 'LeftFoot'];

@@ -65,6 +65,45 @@ The Mixamo roll, landing roll and crouch idle they replace are gone from the bak
 around 1.1 MB per character. `tools/anim/loops.mjs` and `windows.mjs` are the tools that found each clip's
 window; `bake-robot.mjs glb` bakes a whole file for them.
 
+## Third pass: weapons held, smoother camera, centre dot
+
+**Weapons floating away from the arms.** Max's recording showed the gun hanging in front of the face while the
+arms did their own thing. Measuring it (`poselab.html?...&gaps=1` prints how far each hand is from the gun) showed
+the support hand missing the handguard by 12-30 cm in most poses, standing still included, and it predates the
+animation passes. The gun sits where the aim frame puts it (rifle at the shoulder, arm's length ahead of the face)
+and an upright torso simply cannot reach the handguard from there, so the arm IK clamped at full stretch short of it.
+It is fixed in three layers, in `RobotRenderer.ts`:
+
+1. **Reach solver** (`reachSolve`): twists the chest (up to 35 degrees, support shoulder forward) and then leans it
+   (up to 20 degrees) until both hands can reach their sockets, a few iterations of forward kinematics per frame, near
+   fighters only. If the arm is still short the support hand takes hold further back along the gun, and as a last
+   resort the body steps up to 12 cm toward the gun (never for the first-person body, whose head is locked to the
+   camera).
+2. **Gun follows the body:** the gun rides the fast part of the chest's motion (run bob, stride twist, flinch)
+   against a slow reference in the character frame, so it moves with the arms instead of being nailed to the
+   aim frame. Aiming down sights fades this out so the sights stay exactly on the camera.
+3. **First-person gun inertia:** the gun trails fast mouse turns on a damped spring (up to about 5 degrees) and
+   settles; ADS locks it back on.
+
+Result across the stance, crouch-walk, movement and walk sets, both characters: both hands at 0.0 cm from the gun
+(previously up to 30 cm).
+
+**Camera.**
+* Third person hangs from a damped pivot (`smoothPivot` in `GameRenderer.ts`): the pivot advances with a slowed
+  copy of the player's velocity and is pulled to the player with a short time constant, so a steady run has no lag
+  while dashes, slides, landings and stair steps ease in instead of jolting the frame (a dash start trails by about
+  0.3 m and catches up; stopping rolls on a little, like a real follow camera). It is capped, snaps on respawn or a
+  view switch, and never sits behind a wall. Settings: **Camera smoothing** Rigid / Smooth (default) / Floaty.
+* First-person bob is a smooth stride dip with rounded ends (the old one had a cusp every step) plus a gentler sway.
+
+**Centre dot.** The old dot was 2 px and vanished against the ink crosshair. It is now a round dot in the crosshair
+colour with a white ring and a faint dark outer ring, so it reads on any background. Settings: **Centre dot** Off /
+Small / Medium (default) / Large. The four ticks still fade as the sights come up; the dot stays (35% for iron
+sights, fully faded for the sniper scope).
+
+Tuning: `SWAY_SMOOTH` / `SWAY_MAX` / `REACH_YAW` / `REACH_LEAN` in `RobotRenderer.ts`, the lag spring in the
+first-person block before `weaponFrame` there, `smoothPivot` time constants in `GameRenderer.ts`.
+
 ## Verification
 
 * `npm test`, `npm run test:movement` (five new roll checks), `npm run test:upgrade`, `npm run build`.

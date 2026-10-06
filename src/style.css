@@ -21,8 +21,11 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--paper)
 .xh i { position: absolute; background: var(--xh, var(--ink)); box-shadow: 0 0 0 1px rgba(255,255,255,0.85); border-radius: 1px; }
 .xh .t, .xh .b { width: 2px; height: 9px; left: -1px; }
 .xh .l, .xh .r { width: 9px; height: 2px; top: -1px; }
-.xh .dot { width: 2px; height: 2px; left: -1px; top: -1px; }
-.xh.melee i:not(.dot) { opacity: 0.25; }
+.xh i:not(.dot) { opacity: var(--ticks, 1); }
+/* centre dot: crosshair colour with a white ring and a faint ink ring outside it, so it reads on any background */
+.xh .dot { width: var(--dot, 4px); height: var(--dot, 4px); left: calc(var(--dot, 4px) / -2); top: calc(var(--dot, 4px) / -2); border-radius: 50%; opacity: var(--dotop, 1); box-shadow: 0 0 0 1.5px rgba(255,255,255,0.95), 0 0 0 2.5px rgba(27,27,36,0.55); }
+.xh.nodot .dot { display: none; }
+.xh.melee i:not(.dot) { opacity: calc(var(--ticks, 1) * 0.25); }
 
 /* hit confirmation: body / head / kill / blocked read differently at a glance */
 .hm { position: absolute; left: 50%; top: 50%; width: 0; height: 0; opacity: 0; }

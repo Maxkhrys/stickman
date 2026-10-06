@@ -73,6 +73,12 @@ export class Hud {
     this.xh.style.setProperty('--xh', c);
   }
 
+  /** Centre dot diameter in px (0 hides it). */
+  setCrosshairDot(px: number) {
+    this.xh.style.setProperty('--dot', `${px}px`);
+    this.xh.classList.toggle('nodot', px <= 0);
+  }
+
   reset() {
     this.feed.innerHTML = '';
     this.dmgLayer.innerHTML = '';
@@ -94,7 +100,11 @@ export class Hud {
     l.style.left = `${-gap - 9}px`;
     r.style.left = `${gap}px`;
     this.xh.classList.toggle('melee', weapon === 'melee');
-    this.xh.style.opacity = visible ? String(Math.max(0, 1 - adsE * 1.6)) : '0';
+    // the four ticks fade out as the sights come up; the centre dot stays (scopes aside) so there is always
+    // something to put on the target
+    this.xh.style.opacity = visible ? '1' : '0';
+    this.xh.style.setProperty('--ticks', String(Math.max(0, 1 - adsE * 1.6)));
+    this.xh.style.setProperty('--dotop', String(weapon === 'sniper' ? Math.max(0, 1 - adsE * 1.6) : Math.max(0.35, 1 - adsE * 0.6)));
   }
 
   objective(info: MatchInfo, me: Fighter) {

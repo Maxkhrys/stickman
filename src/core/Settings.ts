@@ -40,6 +40,10 @@ export interface Settings {
   character: 'armored' | 'robot' | 'stickman';
   mode: GameMode;
   crosshairColor: string;
+  /** centre dot diameter in px (0 = off) */
+  crosshairDot: number;
+  /** third-person camera follow smoothing: 0 = rigid, 1 = medium, 2 = floaty */
+  cameraSmoothing: number;
   keys: Record<Action, string>;
 }
 
@@ -67,6 +71,8 @@ export const DEFAULT_SETTINGS: Settings = {
   character: 'armored',
   mode: 'range',
   crosshairColor: '#1b1b24',
+  crosshairDot: 4,
+  cameraSmoothing: 1,
   keys: {
     forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', crouch: 'KeyC',
     fire: 'Mouse0', ads: 'Mouse2', reload: 'KeyR', weapon1: 'Digit1', weapon2: 'Digit2', weapon3: 'Digit3', weapon4: 'Digit4',
@@ -90,6 +96,8 @@ function sanitize(p: Partial<Settings> & { volume?: number; cameraBob?: number }
   s.shoulder = s.shoulder === -1 ? -1 : 1;
   s.botCount = Math.max(1, Math.min(8, Math.round(s.botCount || 6)));
   s.fov = Math.max(70, Math.min(120, s.fov));
+  s.crosshairDot = [0, 3, 4, 6].includes(s.crosshairDot) ? s.crosshairDot : 4;
+  s.cameraSmoothing = [0, 1, 2].includes(s.cameraSmoothing) ? s.cameraSmoothing : 1;
   delete (s as unknown as Record<string, unknown>).volume;
   delete (s as unknown as Record<string, unknown>).cameraBob;
   return s;

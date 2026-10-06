@@ -91,5 +91,5 @@ to the Magic set if the cadence ever needs changing; `bake-robot.mjs catalog` me
 `poselab.html` runs the real `RobotRenderer` on static fighters:
 `?set=stance|crouchwalk|melee|roll|rolldirs|react|walks|moves&view=side|front&zoom=2.4&t=2.4&char=armored`
 (`roll` takes `&rdir=` degrees from the aim: 0 forward, 90 right, 155 back-right; add `&dump=1` to log spine
-bone positions). `robotlab.html?char=armored&clips=idleUp,roll,...&phases=6&view=side` shows raw baked clips on
+bone positions, `&gaps=1` to print how far each hand is from the gun, `&swaylog=1` for the gun's travel over a second). `robotlab.html?char=armored&clips=idleUp,roll,...&phases=6&view=side` shows raw baked clips on
 either rig.

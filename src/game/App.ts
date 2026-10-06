@@ -107,6 +107,8 @@ export class App {
     this.renderer.fovKickOn = s.fovKick;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2) * s.renderScale * 0.75);
     this.hud.setCrosshairColor(s.crosshairColor);
+    this.hud.setCrosshairDot(s.crosshairDot);
+    this.renderer.cameraSmoothing = s.cameraSmoothing;
     this.renderer.hitboxes.enabled = s.showHitboxes && this.state !== 'menu' && this.adapter.info().mode === 'range';
     this.renderer.setCharacter(s.character);
   }

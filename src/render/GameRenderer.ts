@@ -121,6 +121,19 @@ export class GameRenderer {
   private lastPz = 0;
   private lastStepId = -1;
   lastMeleeSide = 1;
+  /** third-person follow smoothing (settings): 0 = rigid, 1 = smooth, 2 = floaty */
+  cameraSmoothing = 1;
+  /** third-person pivot (the point the shoulder rig hangs from) and its filtered velocity */
+  private pivot = new THREE.Vector3();
+  private pivotVel = new THREE.Vector3();
+  private pivotTarget = new THREE.Vector3();
+  private pivotId = -1;
+  private pivotInit = false;
+  /** how fast the player is turning the view (rad/s, lightly filtered): drives the first-person gun sway */
+  private lookYawRate = 0;
+  private lookPitchRate = 0;
+  private lastViewYaw = NaN;
+  private lastViewPitch = 0;
   /** camera shake / bob / roll scale (settings) */
   motionScale = 1;
   fovKickOn = true;
@@ -261,6 +274,43 @@ export class GameRenderer {
     return out.sub(cp).normalize().multiplyScalar(0.9).add(cp);
   }
 
+  /**
+   * Predict-and-correct follow filter. The pivot advances with a slowed-down copy of the target's velocity (so a
+   * steady run has no lag at all) and is pulled to the target with a short time constant (so a step, a dash start
+   * or a landing is spread over a fraction of a second). The lag is capped, and the pivot never sits behind a wall.
+   */
+  private smoothPivot(id: number, x: number, y: number, z: number, dt: number, world: World) {
+    const k = this.cameraSmoothing >= 2 ? 1.8 : 1;
+    const off2 = (x - this.pivot.x) ** 2 + (y - this.pivot.y) ** 2 + (z - this.pivot.z) ** 2;
+    if (!this.pivotInit || this.pivotId !== id || dt <= 0 || off2 > 25) {
+      this.pivot.set(x, y, z);
+      this.pivotVel.set(0, 0, 0);
+      this.pivotTarget.set(x, y, z);
+      this.pivotId = id;
+      this.pivotInit = true;
+      return;
+    }
+    const kv = 1 - Math.exp(-dt / (0.1 * k)), kp = 1 - Math.exp(-dt / (0.07 * k));
+    const vx = (x - this.pivotTarget.x) / dt, vy = (y - this.pivotTarget.y) / dt, vz = (z - this.pivotTarget.z) / dt;
+    this.pivotVel.x += (vx - this.pivotVel.x) * kv;
+    this.pivotVel.y += (vy - this.pivotVel.y) * kv;
+    this.pivotVel.z += (vz - this.pivotVel.z) * kv;
+    this.pivot.addScaledVector(this.pivotVel, dt);
+    this.pivot.x += (x - this.pivot.x) * kp;
+    this.pivot.y += (y - this.pivot.y) * kp;
+    this.pivot.z += (z - this.pivot.z) * kp;
+    this.pivotTarget.set(x, y, z);
+    // cap the lag, then keep the pivot on the near side of any wall between it and the real eye
+    const lag = this.pivot.distanceTo(this.pivotTarget), cap = 0.5 * k;
+    if (lag > cap) this.pivot.lerp(this.pivotTarget, 1 - cap / lag);
+    const d = this.pivot.distanceTo(this.pivotTarget);
+    if (d > 0.02) {
+      const dir = camTmp.subVectors(this.pivot, this.pivotTarget).divideScalar(d);
+      const hit = world.raycast({ x, y, z }, { x: dir.x, y: dir.y, z: dir.z }, d + 0.1);
+      if (hit && hit.t < d + 0.05) this.pivot.set(x, y, z);
+    }
+  }
+
   render(fi: FrameInput) {
     const dt = Math.min(0.05, Math.max(0, fi.frameDt));
     const a = fi.alpha;
@@ -304,8 +354,20 @@ export class GameRenderer {
       this.fovPunch.step(dt);
       this.shake = Math.max(0, this.shake - dt * 3);
       const calm = (1 - 0.85 * adsE) * ms;
-      const bobY = (Math.abs(Math.sin(this.bobPhase)) * 0.04 - 0.02) * this.bobAmt * calm;
-      const bobX = Math.cos(this.bobPhase) * 0.018 * this.bobAmt * calm;
+      // smooth stride bob: a dip on each footfall with rounded ends (sin^2 has no cusps, |sin| had), plus a gentle
+      // sway side to side
+      const bobY = (Math.pow(Math.sin(this.bobPhase), 2) * 0.034 - 0.017) * this.bobAmt * calm;
+      const bobX = Math.cos(this.bobPhase) * 0.013 * this.bobAmt * calm;
+      // how fast the view is turning (for the first-person gun sway)
+      if (Number.isNaN(this.lastViewYaw) || dt <= 0) { this.lastViewYaw = fi.viewYaw; this.lastViewPitch = fi.viewPitch; }
+      let dyaw = fi.viewYaw - this.lastViewYaw;
+      while (dyaw > Math.PI) dyaw -= Math.PI * 2;
+      while (dyaw < -Math.PI) dyaw += Math.PI * 2;
+      const kLook = 1 - Math.exp(-dt / 0.045);
+      this.lookYawRate += (Math.max(-12, Math.min(12, dt > 0 ? dyaw / dt : 0)) - this.lookYawRate) * kLook;
+      this.lookPitchRate += (Math.max(-12, Math.min(12, dt > 0 ? (fi.viewPitch - this.lastViewPitch) / dt : 0)) - this.lookPitchRate) * kLook;
+      this.lastViewYaw = fi.viewYaw;
+      this.lastViewPitch = fi.viewPitch;
 
       const stepDy = py - this.lastPy;
       if (this.lastStepId !== me.id || !me.alive || !(Math.abs(stepDy) < 1.5)) this.stepOff = 0;
@@ -349,7 +411,13 @@ export class GameRenderer {
       // robots end inside the sights: ADS_CAMERA_FORWARD ahead of the eye (negative 'back')
       let lr = hipR * keep, lu = hipU * keep, lb = hipB * keep - (robot ? ADS_CAMERA_FORWARD * adsC : 0);
       let viewYaw = fi.viewYaw, viewPitch = fi.viewPitch;
-      const eyeX = px, eyeY = py + this.eyeH + (tp ? 0 : this.stepOff + bobY + this.dip.x * 0.35 * ms), eyeZ = pz;
+      let eyeX = px, eyeY = py + this.eyeH + (tp ? 0 : this.stepOff + bobY + this.dip.x * 0.35 * ms), eyeZ = pz;
+      if (tp && me.alive && this.cameraSmoothing > 0) {
+        // third person: the camera hangs from a damped pivot, so dashes, slides, landings and stair steps ease in
+        // instead of jolting the whole frame
+        this.smoothPivot(me.id, eyeX, eyeY, eyeZ, dt, world);
+        eyeX = this.pivot.x; eyeY = this.pivot.y; eyeZ = this.pivot.z;
+      } else this.pivotInit = false;
       const offsetAt = (yawA: number, pitchA: number, r: number, u: number, bk: number, frac: number, out: THREE.Vector3) => {
         const cpp = Math.cos(pitchA), spp = Math.sin(pitchA), syy = Math.sin(yawA), cyy = Math.cos(yawA);
         // forward f, right rt, up (pitched) u
@@ -489,6 +557,8 @@ export class GameRenderer {
         localId: fi.orbit ? -1 : fi.spectateId,
         viewYaw: this.renderYaw,
         viewPitch: this.renderPitch,
+        lookYawRate: this.lookYawRate,
+        lookPitchRate: this.lookPitchRate,
       });
     } else this.stick.update(worldDt, fi.fighters, a, renderTime, fi.orbit || this.localBodyVisible ? -1 : fi.spectateId, world, this.camera);
     this.hitboxes.update(fi.fighters, fi.spectateId);

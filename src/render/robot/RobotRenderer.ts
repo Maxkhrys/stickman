@@ -228,6 +228,8 @@ interface RobotState {
 export interface RobotViewOptions {
   /** local fighter whose head is hidden (camera inside it), -1 for none */
   hideHeadOf: number;
+  /** local fighter whose weapon is hidden (full-screen scope overlay up, camera inside the scope), -1 for none */
+  hideGunOf?: number;
   /** view yaw/pitch for the local fighter (immediate mouse), so its gun tracks the reticle exactly */
   localId: number;
   viewYaw: number;
@@ -439,7 +441,15 @@ export class RobotRenderer {
     // weighted clip set (walk/run per direction, sprint replaces part of runF)
     const set: [Clip, number][] = [];
     const add = (clip: Clip, w: number) => { if (w > 1e-3) set.push([clip, w]); };
-    add(L.walkF, wF * (1 - runT)); add(L.walkB, wB * (1 - runT)); add(L.walkL, wLt * (1 - runT)); add(L.walkR, wR * (1 - runT));
+    const walkT = 1 - runT;
+    if (weapon === 'sniper' && L.walkSniper) {
+      // Max's sniper walks: rifle-carry walk forward, aimed sidestep while scoped
+      add(L.walkSniper, wF * walkT); add(L.walkB, wB * walkT);
+      add(L.walkL, wLt * walkT * (1 - ads)); add(L.walkSniperAdsL, wLt * walkT * ads);
+      add(L.walkR, wR * walkT * (1 - ads)); add(L.walkSniperAdsR, wR * walkT * ads);
+    } else {
+      add(L.walkF, wF * walkT); add(L.walkB, wB * walkT); add(L.walkL, wLt * walkT); add(L.walkR, wR * walkT);
+    }
     add(L.runF, wF * runT * (1 - sprintT / Math.max(wF, 1e-3))); add(L.runB, wB * runT); add(L.runL, wLt * runT); add(L.runR, wR * runT);
     add(L.sprint, sprintT * runT);
     // phase: advance by distance over the blended cycle length so feet stay planted
@@ -525,7 +535,8 @@ export class RobotRenderer {
 
     // ---- weapon in the shared weapon frame ----
     const key = MODEL_FOR[weapon];
-    for (const k of Object.keys(c.guns) as ModelKey[]) c.guns[k]!.visible = k === key && f.alive;
+    const gunHidden = f.id === view.hideGunOf;
+    for (const k of Object.keys(c.guns) as ModelKey[]) c.guns[k]!.visible = k === key && f.alive && !gunHidden;
     c.gunKey = key;
     const eye = eyePos(f);
     eye.x = px; eye.z = pz;
@@ -541,7 +552,7 @@ export class RobotRenderer {
         c.guns[key] = gun;
         this.group.add(gun);
       }
-      gun.visible = c.root.visible && f.alive;
+      gun.visible = c.root.visible && f.alive && !gunHidden;
       this.wf = weaponFrame(eye, aimYaw, aimPitch, weapon, ads, this.wf ?? undefined)!;
       const w = this.wf;
       const mdl = WEAPON_MODELS[key];

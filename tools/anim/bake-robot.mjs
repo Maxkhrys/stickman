@@ -20,7 +20,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import * as T from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
-import { robotSkeleton } from './robotRig.mjs';
+import { robotSkeleton, readGlbJson } from './robotRig.mjs';
 
 const FPS = 30;
 const ROBOT = process.env.CHAR_GLB ? path.resolve(process.env.CHAR_GLB) : path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../public/assets/robot/robot.glb');
@@ -103,6 +103,59 @@ function sample(packsDir, file) {
   return { frames: out, duration: (frames - 1) / FPS, name: path.basename(file, '.fbx') };
 }
 
+// GLB sources ("file.glb#animation name"): clips authored on a Mixamo-named rig (Tripo exports).
+// The source rest is that file's own node pose; sampling is linear/slerp per keyframe, as glTF says.
+function glbAccessor(json, bin, i) {
+  const a = json.accessors[i], v = json.bufferViews[a.bufferView];
+  const n = { SCALAR: 1, VEC3: 3, VEC4: 4 }[a.type];
+  if (a.componentType !== 5126) throw new Error('only float accessors');
+  const off = (v.byteOffset ?? 0) + (a.byteOffset ?? 0), stride = v.byteStride ?? n * 4, out = new Float32Array(a.count * n);
+  for (let k = 0; k < a.count; k++) for (let c = 0; c < n; c++) out[k * n + c] = bin.readFloatLE(off + k * stride + c * 4);
+  return out;
+}
+function sampleGlb(spec) {
+  const [file, animName] = spec.split('#');
+  const json = readGlbJson(file), raw = fs.readFileSync(file);
+  const jl = raw.readUInt32LE(12), bin = raw.subarray(20 + jl + 8);
+  const anim = json.animations.find(a => a.name === animName);
+  if (!anim) throw new Error(`${file} has no animation "${animName}"`);
+  const { root, bones } = robotSkeleton(file);
+  const restQ = {}, restP = {};
+  for (const [n, b] of Object.entries(bones)) { restQ[n] = b.getWorldQuaternion(new T.Quaternion()); restP[n] = b.getWorldPosition(new T.Vector3()); }
+  const byNode = {};
+  json.nodes.forEach((nd, i) => { if (/^mixamorig/.test(nd.name ?? '')) byNode[i] = bones[nd.name.replace(/^mixamorig:?/, '')]; });
+  const tracks = anim.channels.filter(c => byNode[c.target.node] && c.target.path !== 'scale').map(c => {
+    const s = anim.samplers[c.sampler];
+    return { bone: byNode[c.target.node], path: c.target.path, t: glbAccessor(json, bin, s.input), v: glbAccessor(json, bin, s.output) };
+  });
+  const duration = Math.max(...tracks.map(k => k.t[k.t.length - 1]));
+  const C = {};
+  for (const n of BONES) {
+    if (!bones[n] || !restP[CHILD[n]]) throw new Error(`${path.basename(file)} lacks ${n}`);
+    C[n] = new T.Quaternion().setFromUnitVectors(robotDir(n), restP[CHILD[n]].clone().sub(restP[n]).normalize());
+  }
+  const scale = ROBOT_HIP_Y / restP.Hips.y;
+  const frames = Math.max(2, Math.round(duration * FPS) + 1), out = [], inv = new T.Quaternion(), world = {};
+  const qa = new T.Quaternion(), qb = new T.Quaternion();
+  for (let f = 0; f < frames; f++) {
+    const time = Math.min(duration, f / FPS);
+    for (const k of tracks) {
+      let i = 0; while (i < k.t.length - 2 && k.t[i + 1] <= time) i++;
+      const span = k.t.length > 1 ? k.t[i + 1] - k.t[i] : 1, u = k.t.length > 1 ? Math.min(1, Math.max(0, (time - k.t[i]) / span)) : 0;
+      const j = Math.min(i + 1, k.t.length - 1);
+      if (k.path === 'rotation') k.bone.quaternion.copy(qa.fromArray(k.v, i * 4).slerp(qb.fromArray(k.v, j * 4), u));
+      else k.bone.position.set(...[0, 1, 2].map(c => k.v[i * 3 + c] + (k.v[j * 3 + c] - k.v[i * 3 + c]) * u));
+    }
+    root.updateMatrixWorld(true);
+    for (const n of BONES) world[n] = bones[n].getWorldQuaternion(new T.Quaternion()).multiply(inv.copy(restQ[n]).invert()).multiply(C[n]).multiply(R0[n]);
+    const q = {};
+    for (const n of BONES) q[n] = PARENT[n] ? world[PARENT[n]].clone().invert().multiply(world[n]) : world[n].clone();
+    const hip = bones.Hips.getWorldPosition(new T.Vector3()).sub(restP.Hips).multiplyScalar(scale).add(P0.Hips);
+    out.push({ q, hip });
+  }
+  return { frames: out, duration: (frames - 1) / FPS, name: animName };
+}
+
 // Forward kinematics on the robot skeleton, to measure what the robot actually does with a clip.
 function robotFK() {
   const { root, bones } = robotSkeleton(ROBOT);
@@ -139,7 +192,27 @@ function measure(clip) {
 }
 
 const r4 = v => Math.round(v * 1e4) / 1e4;
-function bake(clip, { loop = false, trim = [0, Infinity], speed = 1, flatY = false }) {
+/** Left/right mirror (x -> -x) of a sampled clip: each bone takes its opposite's rest-relative rotation. */
+function mirrorClip(clip) {
+  const opp = n => n.startsWith('Left') ? 'Right' + n.slice(4) : n.startsWith('Right') ? 'Left' + n.slice(5) : n;
+  const m = q => new T.Quaternion(q.x, -q.y, -q.z, q.w);
+  return { ...clip, name: clip.name + ' (mirrored)', frames: clip.frames.map(fr => {
+    const world = {};
+    for (const n of BONES) {
+      let w = fr.q[n].clone();
+      for (let p = PARENT[n]; p; p = PARENT[p]) w = fr.q[p].clone().multiply(w);
+      world[n] = w;
+    }
+    const out = {};
+    for (const n of BONES) { const o = opp(n); out[n] = m(world[o].clone().multiply(R0[o].clone().invert())).multiply(R0[n]); }
+    const q = {};
+    for (const n of BONES) q[n] = PARENT[n] ? out[PARENT[n]].clone().invert().multiply(out[n]) : out[n].clone();
+    return { q, hip: new T.Vector3(2 * P0.Hips.x - fr.hip.x, fr.hip.y, fr.hip.z) };
+  }) };
+}
+
+function bake(clip, { loop = false, trim = [0, Infinity], speed = 1, flatY = false, mirror = false, strideFromTravel = false, center = false }) {
+  if (mirror) clip = mirrorClip(clip);
   const s = Math.round(trim[0] * FPS), e = Math.min(clip.frames.length - 1, Math.round(trim[1] * FPS));
   let F = clip.frames.slice(s, e + 1);
   const n = F.length, a = F[0].hip.clone(), z = F[n - 1].hip.clone();
@@ -154,12 +227,15 @@ function bake(clip, { loop = false, trim = [0, Infinity], speed = 1, flatY = fal
     });
     // In place: loops lose their average travel; one-shots lose all horizontal travel.
     const off = loop ? new T.Vector3((z.x - a.x) * f / (n - 1), 0, (z.z - a.z) * f / (n - 1)) : new T.Vector3(fr.hip.x - a.x, 0, fr.hip.z - a.z);
-    hip.push(r4(fr.hip.x - off.x - P0.Hips.x), r4((flatY ? a.y : fr.hip.y) - P0.Hips.y), r4(fr.hip.z - off.z - P0.Hips.z));
+    // center: a clip cut mid-walk starts away from the origin; pull its first frame back over the feet' origin
+    const cx = center ? a.x - P0.Hips.x : 0, cz = center ? a.z - P0.Hips.z : 0;
+    hip.push(r4(fr.hip.x - off.x - cx - P0.Hips.x), r4((flatY ? a.y : fr.hip.y) - P0.Hips.y), r4(fr.hip.z - off.z - cz - P0.Hips.z));
   });
-  return { frames: n, fps: FPS * speed, loop, stride: r4(m.stride * speed), travel: r4(m.rootSpeed * speed), sync: r4(m.sync), q: Buffer.from(q.buffer).toString('base64'), hip };
+  return { frames: n, fps: FPS * speed, loop, stride: r4((strideFromTravel ? m.rootSpeed : m.stride) * speed), travel: r4(m.rootSpeed * speed), sync: r4(m.sync), q: Buffer.from(q.buffer).toString('base64'), hip };
 }
 
 // Chosen clips: [runtime name, pack/file, options]. Reasons in docs/ANIMATION_SOURCES.md.
+const MAX = 'Max/walking with sniper.glb';
 const S = 'Basic Shooter Pack/', A = 'Action Adventure Pack/', M = 'Magic Locomotion Pack/', P = 'Pro Sword and Shield Pack/', G = 'Singles/', f = x => x / FPS;
 export const PICKS = [
   // Rifle stance: full body at rest, and the upper-body base layer while moving.
@@ -186,6 +262,12 @@ export const PICKS = [
   // Upper-body actions.
   ['reload', S + 'reloading', {}],
   ['fire', S + 'firing rifle', {}],
+  // Sniper walk pair from Max (Tripo export on the robot rig): hip carry and scoped walk.
+  // Each is trimmed to one whole step cycle (the export runs 4 1/6), matching the other walks; the scoped one is a
+  // sidestep to the right while aiming, mirrored for the left. Planted-foot speed = root travel.
+  ['walkSniper', MAX + '#walking holding a sniper.001', { loop: true, trim: [f(18), f(54)], strideFromTravel: true, center: true }],
+  ['walkSniperAdsR', MAX + '#aimed down sights with sniper walking.001', { loop: true, trim: [f(30), f(66)], strideFromTravel: true, center: true }],
+  ['walkSniperAdsL', MAX + '#aimed down sights with sniper walking.001', { loop: true, trim: [f(30), f(66)], strideFromTravel: true, mirror: true, center: true }],
 ];
 
 const [cmd, dir, outFile] = process.argv.slice(2);
@@ -205,8 +287,9 @@ if (cmd === 'catalog') {
 } else if (cmd === 'bake') {
   const clips = {};
   for (const [name, file, opt] of PICKS) {
-    clips[name] = bake(sample(dir, path.join(dir, file + '.fbx')), opt);
-    clips[name].source = file + '.fbx';
+    const glbSrc = file.includes('.glb#');
+    clips[name] = bake(glbSrc ? sampleGlb(path.join(dir, file)) : sample(dir, path.join(dir, file + '.fbx')), opt);
+    clips[name].source = glbSrc ? file : file + '.fbx';
     console.error(name.padEnd(11), String(clips[name].frames).padStart(3), 'frames, stride', clips[name].stride, 'travel', clips[name].travel, 'sync', clips[name].sync, '<-', file);
   }
   fs.writeFileSync(outFile, JSON.stringify({ fps: FPS, bones: BONES, restHip: P0.Hips.toArray(), clips }));

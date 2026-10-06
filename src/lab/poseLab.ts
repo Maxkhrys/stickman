@@ -42,6 +42,14 @@ const setups: Setup[] = qs.get('set') === 'moves'
       { w: weaponQ ?? 'sniper', sliding: true, height: MOVE.crouchHeight, vz: -10 },
       { w: weaponQ ?? 'sniper', onGround: false, vz: -5, vy: 3 } as Setup,
     ]
+  : qs.get('set') === 'walks'
+  ? [
+      { w: 'ar', vz: -1.5 },
+      { w: 'sniper', vz: -1.5 },
+      { w: 'sniper', vz: -1.2, ads: 1 },
+      { w: 'sniper', vx: 1.2, ads: 1 },
+      { w: 'sniper', vx: -1.2, ads: 1 },
+    ]
   : (['sniper', 'ar', 'smg', 'pistol'] as WeaponId[]).flatMap((w) => [{ w, ads: adsQ }, { w, ads: 1 }]);
 const fighters: Fighter[] = setups.map((s, i) => {
   const f = createFighter(i, 'f' + i, 0xffffff, 'player', [s.w]);

@@ -408,7 +408,8 @@ export class GameRenderer {
       // weapon in view all the way into first person, the stickman hands over to its viewmodel
       this.thirdPersonActive = me.alive && camDist > 0.3;
       this.localBodyVisible = robot ? true : camDist > 0.45 || !me.alive;
-      this.hideHead = robot && me.alive && camDist < 0.45;
+      // the robot rigs' heads (hair, helmet) reach well past 0.45 m from the eye: clear them early in ADS
+      this.hideHead = robot && me.alive && camDist < 0.9;
 
       // ---- FOV: speed kick at hip, iron-sight zoom, scope zoom synced with the overlay ----
       const speedKick = Math.max(0, Math.min(1, (hs - MOVE.maxSpeed * 0.9) / 6));
@@ -471,6 +472,7 @@ export class GameRenderer {
     if (this.useRobot && this.robots) {
       this.robots.update(worldDt, fi.fighters, a, renderTime, world, this.camera, {
         hideHeadOf: this.hideHead && !fi.orbit ? fi.spectateId : -1,
+        hideGunOf: this.zoom.scopeCover > 0.02 && !fi.orbit ? fi.spectateId : -1,
         localId: fi.orbit ? -1 : fi.spectateId,
         viewYaw: this.renderYaw,
         viewPitch: this.renderPitch,

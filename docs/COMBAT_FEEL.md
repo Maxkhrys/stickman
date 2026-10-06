@@ -104,6 +104,25 @@ sights, fully faded for the sniper scope).
 Tuning: `SWAY_SMOOTH` / `SWAY_MAX` / `REACH_YAW` / `REACH_LEAN` in `RobotRenderer.ts`, the lag spring in the
 first-person block before `weaponFrame` there, `smoothPivot` time constants in `GameRenderer.ts`.
 
+## Fourth pass: Rogue Company style ADS
+
+Aiming down sights used to slide the camera into the gun's sights (first-person view behind a huge gun) for every
+weapon. In third person, every weapon except the scoped sniper now aims the way Rogue Company does:
+
+* The camera stays over the shoulder, eases in toward the aim line (it gives up 30% of its distance, 30% of its
+  sideways offset and 20% of its height at full ADS) and zooms (the weapon's own `adsZoom`, at least 10% for the
+  pistol), so the character, the gun and the target stay in one frame.
+* The gun comes up to the cheek on the shoulder it hangs from (the hip carry raised to eye level and drawn in a
+  little) and points along the aim, visible next to the head, instead of sliding onto the camera line. The
+  crosshair, its tightened spread and the centre dot stay on screen.
+* The sniper keeps the first-person scope overlay. First-person camera mode (V) keeps proper sights-up ADS for
+  every weapon.
+
+Tuning: `SHOULDER_ADS` in `GameRenderer.ts` (camera tightening and zoom) and `SHOULDER_AIM` in `RobotRenderer.ts`
+(gun pose). The sim is unchanged: spread, speed and timing in ADS still come from the weapon definitions, and the
+sim's muzzle still blends to the sights, a few centimetres from the drawn one, which only shifts where a tracer
+starts.
+
 ## Verification
 
 * `npm test`, `npm run test:movement` (five new roll checks), `npm run test:upgrade`, `npm run build`.

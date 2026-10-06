@@ -378,6 +378,8 @@ export interface RobotViewOptions {
   /** how fast the local player is turning the view (rad/s); first-person gun sway */
   lookYawRate?: number;
   lookPitchRate?: number;
+  /** third-person shoulder ADS is active: guns come up to the shoulder instead of sliding onto the camera */
+  shoulderAds?: boolean;
 }
 
 /** the gun rides the chest's motion above this frequency's worth of smoothing (seconds), and no further than this (m) */
@@ -386,6 +388,8 @@ const SWAY_MAX = 0.07;
 /** reach solver limits: chest twist (rad), chest lean (rad) and the arm length fraction a hand may be asked for */
 const REACH_YAW = 0.62;
 const REACH_LEAN = 0.34;
+/** shoulder ADS gun pose: pulled forward and in toward the head from the hip carry (m), on top of the raise to eye level */
+const SHOULDER_AIM = { forward: 0.05, inward: 0.04 };
 const HURT_TIME = 0.42;
 /** a headshot snaps the head back for longer */
 const HEAD_HURT_TIME = 0.66;
@@ -954,8 +958,19 @@ export class RobotRenderer {
       }
       gun.visible = c.root.visible && f.alive && !gunHidden;
       useLod(gun, c.lod);
-      this.wf = weaponFrame(eye, aimYaw, aimPitch, weapon, ads, this.wf ?? undefined)!;
+      // Rogue Company style ADS (third person, not the sniper): the gun comes up to the cheek on the shoulder it hangs
+      // from, raised to eye level and drawn in a little, where the camera can see it over the shoulder, rather than
+      // sliding onto the camera line
+      const shoulderAim = !!view.shoulderAds && key !== 'sniper' && ads > 0;
+      this.wf = weaponFrame(eye, aimYaw, aimPitch, weapon, shoulderAim ? 0 : ads, this.wf ?? undefined)!;
       const w = this.wf;
+      if (shoulderAim) {
+        const a = adsBlend(ads), hip = w.model.hip;
+        const raise = -hip[1] * a, fwd = SHOULDER_AIM.forward * a, inward = Math.min(hip[0], SHOULDER_AIM.inward) * a;
+        w.o.x += w.u.x * raise + w.f.x * fwd - w.r.x * inward;
+        w.o.y += w.u.y * raise + w.f.y * fwd - w.r.y * inward;
+        w.o.z += w.u.z * raise + w.f.z * fwd - w.r.z * inward;
+      }
       // the gun rides the fast part of the chest's motion (run bob, stride twist, flinch), measured against a slow
       // reference in the character frame, so it moves with the body and arms instead of hanging in the aim frame.
       // Aiming down sights fades it out: the sights must stay exactly on the camera

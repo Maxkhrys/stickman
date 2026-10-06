@@ -17,6 +17,11 @@ import { RobotRenderer, robotAssets } from './robot/RobotRenderer';
 
 /** Shoulder camera tuning (metres, in the aim frame). See docs/SNIPER_UPGRADE.md. */
 export const CAM = { right: 0.62, up: 0.2, back: 2.35 };
+/**
+ * Rogue Company style ADS (third person, every weapon but the scoped sniper): the camera stays over the shoulder, pulls
+ * in toward the aim line (fractions of CAM it gives up at full ADS) and zooms, instead of sliding into the sights.
+ */
+export const SHOULDER_ADS = { right: 0.3, up: 0.2, back: 0.3, zoom: 0.9 };
 
 const camTmp = new THREE.Vector3();
 const camTmp2 = new THREE.Vector3();
@@ -130,6 +135,8 @@ export class GameRenderer {
   private pivotId = -1;
   private pivotInit = false;
   /** how fast the player is turning the view (rad/s, lightly filtered): drives the first-person gun sway */
+  /** shoulder (Rogue Company style) ADS is the active aiming style: third person and not the scoped sniper */
+  private shoulderAdsOn = false;
   private lookYawRate = 0;
   private lookPitchRate = 0;
   private lastViewYaw = NaN;
@@ -407,9 +414,14 @@ export class GameRenderer {
       this.shoulderSide += (side - this.shoulderSide) * (1 - Math.exp(-14 * dt));
       // local offset in the aim frame: right, up, back (metres)
       const hipR = tp ? CAM.right * this.shoulderSide : 0, hipU = tp ? CAM.up : 0, hipB = tp ? CAM.back : 0;
-      const keep = robot || !def.scope ? 1 - adsC : Math.max(0, 1 - ads * 4); // stickman scopes cut straight to the viewmodel
+      // shoulder ADS: no sights-up camera, so the rig is kept (and tightened below); first person and the sniper's scope
+      // still go behind the sights (stickman scopes cut straight to the viewmodel)
+      const shoulderAds = tp && !def.scope;
+      this.shoulderAdsOn = shoulderAds;
+      const keep = shoulderAds ? 1 : robot || !def.scope ? 1 - adsC : Math.max(0, 1 - ads * 4);
       // robots end inside the sights: ADS_CAMERA_FORWARD ahead of the eye (negative 'back')
-      let lr = hipR * keep, lu = hipU * keep, lb = hipB * keep - (robot ? ADS_CAMERA_FORWARD * adsC : 0);
+      const tight = shoulderAds ? adsC : 0;
+      let lr = hipR * keep * (1 - SHOULDER_ADS.right * tight), lu = hipU * keep * (1 - SHOULDER_ADS.up * tight), lb = hipB * keep * (1 - SHOULDER_ADS.back * tight) - (robot && !shoulderAds ? ADS_CAMERA_FORWARD * adsC : 0);
       let viewYaw = fi.viewYaw, viewPitch = fi.viewPitch;
       let eyeX = px, eyeY = py + this.eyeH + (tp ? 0 : this.stepOff + bobY + this.dip.x * 0.35 * ms), eyeZ = pz;
       if (tp && me.alive && this.cameraSmoothing > 0) {
@@ -498,7 +510,7 @@ export class GameRenderer {
       this.fovKick += (targetKick - this.fovKick) * (1 - Math.exp(-6 * dt));
       const hipH = ((fi.hfov + this.fovKick + this.fovPunch.x) * Math.PI) / 360;
       let tanV = Math.tan(hipH) / this.camera.aspect;
-      tanV *= 1 + (def.adsZoom - 1) * adsE;
+      tanV *= 1 + ((shoulderAds ? Math.min(def.adsZoom, SHOULDER_ADS.zoom) : def.adsZoom) - 1) * adsE;
       let scopeCover = 0;
       if (def.scope && me.alive) {
         const sc = def.scope;
@@ -559,6 +571,7 @@ export class GameRenderer {
         viewPitch: this.renderPitch,
         lookYawRate: this.lookYawRate,
         lookPitchRate: this.lookPitchRate,
+        shoulderAds: this.shoulderAdsOn,
       });
     } else this.stick.update(worldDt, fi.fighters, a, renderTime, fi.orbit || this.localBodyVisible ? -1 : fi.spectateId, world, this.camera);
     this.hitboxes.update(fi.fighters, fi.spectateId);

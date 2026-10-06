@@ -192,7 +192,7 @@ for (let i = 0; i < N; i++) {
     }
     if (s.deadAgo !== undefined && trigger(s.deadAgo)) f.alive = false;
   });
-  rr.update(t / N, fighters, 1, now, world, cam, { hideHeadOf: view === 'fp' ? idx : -1, localId: -1, viewYaw: 0, viewPitch: 0 });
+  rr.update(t / N, fighters, 1, now, world, cam, { hideHeadOf: view === 'fp' ? idx : -1, localId: -1, viewYaw: 0, viewPitch: 0, shoulderAds: qs.get('shoulderads') === '1' });
   if (qs.get('swaylog') && i >= N / 2) {
     fighters.forEach((f, k) => {
       const c = (rr as unknown as { chars: Map<number, { guns: Record<string, THREE.Object3D>; gunKey: string | null }> }).chars.get(f.id)!;

@@ -1,3 +1,4 @@
+import { MOVE } from '../config/movement';
 import { WEAPONS } from '../config/weapons';
 import type { Fighter } from '../sim/fighter';
 import type { MatchInfo } from '../sim/match';
@@ -11,7 +12,7 @@ const el = (tag: string, cls = '', html = '') => {
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 const hex = (c: number) => '#' + c.toString(16).padStart(6, '0');
-export const WNAME: Record<string, string> = { ar: 'Inkblaster', sniper: 'Graphite', pistol: 'Highlighter', melee: 'Pencil', smg: 'Scribbler', carbine: 'Finepoint' };
+export const WNAME: Record<string, string> = { ar: 'Vanguard AR', sniper: 'Longshot', pistol: 'Sidearm', melee: 'Pencil', smg: 'Compact', carbine: 'Finepoint' };
 
 export type HitKind = 'body' | 'head' | 'kill' | 'blocked';
 
@@ -29,6 +30,10 @@ export class Hud {
   private vignette = el('div', 'vignette');
   private hpPanel = el('div', 'panel hp', '<span class="lbl">INK</span><span class="num">100</span><div class="bar"><div></div></div><div class="protect hidden">protected<div class="pbar"><div></div></div></div>');
   private ammoPanel = el('div', 'panel ammo');
+  /** dash charges (refill shown as a partial pip), air jump and air dash */
+  private movePanel = el('div', 'panel move', '<span class="lbl">DASH</span><i class="pip d0"><b></b></i><i class="pip d1"><b></b></i><span class="lbl air">AIR</span><i class="pip aj" title="air jump"></i><i class="pip ad" title="air dash"></i>');
+  /** sniper readiness under the crosshair: fills while scoping in, empties during the bolt */
+  private ready = el('div', 'ready hidden', '<div></div>');
   private objectiveKey = '';
   private objectivePanel = el('div', 'objective-panel hidden');
   private top = el('div', 'panel top', '<div class="timer"></div><div class="score"></div>');
@@ -55,7 +60,7 @@ export class Hud {
 
   constructor(parent: HTMLElement) {
     this.root.id = 'hud';
-    for (const e of [this.dmgLayer, this.tagLayer, this.indLayer, this.vignette, this.xh, this.hm, this.hpPanel, this.ammoPanel, this.objectivePanel, this.top, this.fpsEl, this.feed, this.notice, this.note, this.stats, this.death, this.board])
+    for (const e of [this.dmgLayer, this.tagLayer, this.indLayer, this.vignette, this.xh, this.hm, this.hpPanel, this.movePanel, this.ready, this.ammoPanel, this.objectivePanel, this.top, this.fpsEl, this.feed, this.notice, this.note, this.stats, this.death, this.board])
       this.root.appendChild(e);
     parent.appendChild(this.root);
   }
@@ -304,6 +309,29 @@ export class Hud {
 
     const slot = me.weapons[me.cur];
     const def = WEAPONS[slot.id];
+
+    // movement resources
+    for (let i = 0; i < MOVE.dashCharges; i++) {
+      const pip = this.movePanel.querySelector(`.d${i}`) as HTMLElement | null;
+      if (!pip) continue;
+      const fill = Math.max(0, Math.min(1, me.dashCharges - i));
+      pip.classList.toggle('full', fill >= 1);
+      (pip.firstElementChild as HTMLElement).style.height = `${fill * 100}%`;
+    }
+    (this.movePanel.querySelector('.aj') as HTMLElement).classList.toggle('full', me.airJumpsLeft > 0);
+    (this.movePanel.querySelector('.ad') as HTMLElement).classList.toggle('full', me.airDashesLeft > 0);
+    this.movePanel.classList.toggle('hidden', !me.alive);
+
+    // sniper readiness: scope-in progress up to the ready threshold, then the bolt cycle
+    const showReady = me.alive && def.adsReady !== undefined && (me.ads > 0.01 || me.fireCooldown > 0);
+    this.ready.classList.toggle('hidden', !showReady);
+    if (showReady) {
+      const bolt = me.fireCooldown > 0 ? 1 - me.fireCooldown / def.fireInterval : 1;
+      const scope = Math.min(1, me.ads / def.adsReady!);
+      const v = Math.min(scope, bolt);
+      this.ready.classList.toggle('ok', v >= 1);
+      (this.ready.firstElementChild as HTMLElement).style.width = `${v * 100}%`;
+    }
     const reloadP = me.reloadTimer > 0 ? 1 - me.reloadTimer / def.reloadTime : -1;
     const key = `${slot.id}|${slot.mag}|${me.cur}|${Math.round(reloadP * 20)}|${me.weapons.length}`;
     if (key !== this.lastAmmoKey) {

@@ -2,7 +2,8 @@ import { WEAPONS } from '../config/weapons';
 import { MOVE } from '../config/movement';
 import type { DummyDef } from './map';
 import type { WeaponId } from './types';
-import { v3, type Vec3 } from './vec';
+import { forwardFromAngles, v3, type Vec3 } from './vec';
+import { socketWorld, weaponFrame } from './weaponFrame';
 
 export type FighterKind = 'player' | 'bot' | 'dummy';
 
@@ -61,6 +62,27 @@ export interface Fighter {
   stepAccum: number;
   lastLandTime: number;
   lastLandSpeed: number;
+  lastJumpTime: number;
+  /** air jumps / air dashes left this airtime (refilled on a confirmed landing) */
+  airJumpsLeft: number;
+  airDashesLeft: number;
+  lastAirJumpTime: number;
+  /** dash charges (fractional while refilling) */
+  dashCharges: number;
+  /** remaining active dash time; > 0 = dashing */
+  dashTimer: number;
+  dashDirX: number;
+  dashDirZ: number;
+  dashAir: boolean;
+  lastDashTime: number;
+  slideTime: number;
+  lastSlideBoostTime: number;
+  /** sim time the current ADS began (for quickscope feedback) */
+  adsStartTime: number;
+  /** aim origin offset from the eye used by the last command (camera position) */
+  aimOX: number;
+  aimOY: number;
+  aimOZ: number;
 
   hp: number;
   maxHp: number;
@@ -139,6 +161,22 @@ export function createFighter(id: number, name: string, color: number, kind: Fig
     stepAccum: 0,
     lastLandTime: -99,
     lastLandSpeed: 0,
+    lastJumpTime: -99,
+    airJumpsLeft: MOVE.airJumps,
+    airDashesLeft: MOVE.airDashes,
+    lastAirJumpTime: -99,
+    dashCharges: MOVE.dashCharges,
+    dashTimer: 0,
+    dashDirX: 0,
+    dashDirZ: -1,
+    dashAir: false,
+    lastDashTime: -99,
+    slideTime: 0,
+    lastSlideBoostTime: -99,
+    adsStartTime: -99,
+    aimOX: 0,
+    aimOY: 0,
+    aimOZ: 0,
     hp: 100,
     maxHp: 100,
     alive: false,
@@ -194,15 +232,12 @@ export function curDef(f: Fighter) {
   return WEAPONS[f.weapons[f.cur].id];
 }
 
-/** Where the weapon's barrel sits relative to the eye (sim-side, used for obstruction + 3rd-person tracers). */
+/** Where the weapon's muzzle is (sim side: shot traces, obstruction, tracer origin for remote fighters). */
 export function muzzlePos(f: Fighter): Vec3 {
   const e = eyePos(f);
-  const cp = Math.cos(f.pitch), sp = Math.sin(f.pitch);
-  const sy = Math.sin(f.yaw), cy = Math.cos(f.yaw);
-  const fw = v3(-sy * cp, sp, -cy * cp);
-  const rt = v3(cy, 0, -sy);
-  const up = v3(sy * sp, cp, cy * sp);
-  const a = f.ads;
-  const fwd = 0.55, right = 0.13 * (1 - a), down = 0.15 - 0.09 * a;
-  return v3(e.x + fw.x * fwd + rt.x * right - up.x * down, e.y + fw.y * fwd - up.y * down, e.z + fw.z * fwd + rt.z * right - up.z * down);
+  const w = weaponFrame(e, f.yaw, f.pitch, f.weapons[f.cur].id, f.ads);
+  if (w) return socketWorld(w, w.model.muzzle);
+  // melee / no model: a point just ahead of the right shoulder
+  const fw = forwardFromAngles(f.yaw, f.pitch);
+  return v3(e.x + fw.x * 0.5 + Math.cos(f.yaw) * 0.15, e.y + fw.y * 0.5 - 0.2, e.z + fw.z * 0.5 - Math.sin(f.yaw) * 0.15);
 }

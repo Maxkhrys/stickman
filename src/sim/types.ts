@@ -7,6 +7,7 @@ export const BTN = {
   FIRE: 4,
   ADS: 8,
   RELOAD: 16,
+  DASH: 32,
 } as const;
 
 /**
@@ -26,10 +27,18 @@ export interface InputCommand {
   slot: number;
   /** Scroll wheel weapon cycling: -1, 0, 1 */
   scroll: number;
+  /**
+   * Aim origin relative to the fighter's eye (metres): where the active camera sits. Shots find their
+   * intended point along the camera ray from here, then trace from the muzzle. Zero = shoot from the
+   * eye (bots, first person). The sim clamps it and checks the eye can see it.
+   */
+  ox: number;
+  oy: number;
+  oz: number;
 }
 
 export function emptyCommand(seq = 0): InputCommand {
-  return { seq, yaw: 0, pitch: 0, forward: 0, strafe: 0, buttons: 0, slot: -1, scroll: 0 };
+  return { seq, yaw: 0, pitch: 0, forward: 0, strafe: 0, buttons: 0, slot: -1, scroll: 0, ox: 0, oy: 0, oz: 0 };
 }
 
 /** Hit regions. chest = upper torso + neck, stomach = lower torso + pelvis. */
@@ -67,6 +76,10 @@ export type GameEvent =
       weapon: WeaponId;
       /** damage prevented by spawn protection */
       blocked: boolean;
+      /** shooter state when the shot left the muzzle (real shot state, drives feedback) */
+      airborne: boolean;
+      quickscope: boolean;
+      distance: number;
     }
   | {
       type: 'kill';
@@ -77,6 +90,9 @@ export type GameEvent =
       backstab: boolean;
       part: HitPart;
       dir: Vec3;
+      airborne: boolean;
+      quickscope: boolean;
+      distance: number;
     }
   | { type: 'reload'; id: number; weapon: WeaponId }
   | { type: 'reloadInsert'; id: number; weapon: WeaponId }
@@ -85,9 +101,12 @@ export type GameEvent =
   | { type: 'switch'; id: number; weapon: WeaponId }
   | { type: 'dryfire'; id: number }
   | { type: 'jump'; id: number }
+  | { type: 'airJump'; id: number }
+  | { type: 'dash'; id: number; air: boolean; dx: number; dz: number }
   | { type: 'land'; id: number; speed: number }
   | { type: 'step'; id: number }
   | { type: 'slide'; id: number }
   | { type: 'spawn'; id: number }
   | { type: 'protectEnd'; id: number }
-  | { type: 'matchEnd' };
+  | { type: 'matchEnd' }
+  | { type: 'reset' };

@@ -70,6 +70,11 @@ export interface WeaponDef {
   /** ADS accuracy ramps (smoothstep) between these ADS-progress values */
   adsAccuracyStart: number;
   adsAccuracyFull: number;
+  /**
+   * Precision weapons: ADS progress at which the shot becomes exact (spread 0, also moving and
+   * airborne). Below it the weapon fires with hip spread. Absent = the gradual adsAccuracy ramp.
+   */
+  adsReady?: number;
 
   // ---- gameplay recoil (moves the actual aim; the camera shows exactly this) ----
   /** sharp per-shot impulse that decays exponentially with time constant kickTau */
@@ -113,7 +118,7 @@ const BASE_WEAPONS: Record<Exclude<WeaponId, 'smg' | 'carbine'>, WeaponDef> = {
   // "Inkblaster" - fountain-pen assault rifle. Sharp impulse, short recovery, gentle learnable climb.
   ar: {
     id: 'ar',
-    name: 'Inkblaster',
+    name: 'Vanguard AR',
     kind: 'hitscan',
     damage: { head: 60, chest: 25, stomach: 25, limb: 20 },
     magSize: 30,
@@ -169,54 +174,57 @@ const BASE_WEAPONS: Record<Exclude<WeaponId, 'smg' | 'carbine'>, WeaponDef> = {
     adsMoveMult: 0.75,
   },
 
-  // "Graphite" - mechanical-pencil bolt-action sniper built for quickscopes.
+  // Bolt-action quickscope sniper (uploaded futuristic sniper model).
   sniper: {
     id: 'sniper',
-    name: 'Graphite',
+    name: 'Longshot',
     kind: 'hitscan',
-    damage: { head: 150, chest: 110, stomach: 80, limb: 60 },
+    damage: { head: 150, chest: 110, stomach: 85, limb: 60 },
     magSize: 5,
     fireInterval: 0.12,
     auto: false,
-    reloadTime: 2.3,
+    reloadTime: 2.2,
     reloadInsertAt: 0.6,
-    drawTime: 0.45,
-    range: 300,
+    drawTime: 0.4,
+    range: 320,
     falloffStart: 999,
     falloffEnd: 1000,
     falloffMin: 1,
-    spreadHip: 0.075,
-    spreadMove: 0.05,
-    spreadAir: 0.08,
+    // hip fire: distinct, wide and configurable
+    spreadHip: 0.06,
+    spreadMove: 0.03,
+    spreadAir: 0.04,
     spreadPerShot: 0,
     spreadMax: 0,
     spreadRecover: 1,
     adsSpreadMult: 0,
-    adsMoveSpreadMult: 0.12,
-    // reliable right as the scope image appears (overlay 0.72 -> 0.85)
-    adsAccuracyStart: 0.45,
-    adsAccuracyFull: 0.85,
-    kickPitch: 0.05,
+    adsMoveSpreadMult: 0,
+    adsAccuracyStart: 0.8,
+    adsAccuracyFull: 0.8,
+    // exact once the scope is up (overlay fully shown at the same moment)
+    adsReady: 0.8,
+    kickPitch: 0.045,
     kickYaw: 0.004,
-    kickTau: 0.09,
-    recoilPattern: [[0.012, 0.0]],
+    kickTau: 0.08,
+    recoilPattern: [[0.01, 0.0]],
     recoilLoopFrom: 0,
-    recoilRecover: 0.5,
-    recoilRecoverDelay: 0.08,
-    recoilMaxPitch: 0.05,
+    recoilRecover: 0.6,
+    recoilRecoverDelay: 0.06,
+    recoilMaxPitch: 0.04,
     adsRecoilMult: 0.8,
-    adsTime: 0.28,
+    // scope entry ~150 ms
+    adsTime: 0.15,
     adsZoom: 1,
-    scope: { vfov: 17, overlayStart: 0.72, overlayFull: 0.85 },
-    moveSpeedMult: 0.92,
-    adsMoveMult: 0.55,
-    bolt: { delay: 0.14, time: 0.78 },
+    scope: { vfov: 16, overlayStart: 0.5, overlayFull: 0.8 },
+    moveSpeedMult: 0.95,
+    adsMoveMult: 0.6,
+    bolt: { delay: 0.16, time: 0.7 },
   },
 
   // "Highlighter" - punchy semi-auto sidearm with a quick draw.
   pistol: {
     id: 'pistol',
-    name: 'Highlighter',
+    name: 'Sidearm',
     kind: 'hitscan',
     damage: { head: 90, chest: 34, stomach: 34, limb: 28 },
     magSize: 12,
@@ -306,7 +314,7 @@ const BASE_WEAPONS: Record<Exclude<WeaponId, 'smg' | 'carbine'>, WeaponDef> = {
 export const WEAPONS: Record<WeaponId, WeaponDef> = {
   ...BASE_WEAPONS,
   smg: {
-    ...BASE_WEAPONS.ar, id: 'smg', name: 'Scribbler',
+    ...BASE_WEAPONS.ar, id: 'smg', name: 'Compact',
     damage: { head: 38, chest: 18, stomach: 18, limb: 15 }, magSize: 36,
     fireInterval: 60 / 900, reloadTime: 1.55, drawTime: 0.2, adsTime: 0.12,
     falloffStart: 14, falloffEnd: 42, falloffMin: 0.48,

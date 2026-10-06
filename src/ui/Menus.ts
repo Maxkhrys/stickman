@@ -151,8 +151,9 @@ export class Menus {
     }));
     matchRows.push(diffRow, countRow, primRow);
     card.append(diffRow, countRow, primRow);
-    card.appendChild(this.row('Arena', this.seg<'arena' | 'bookyard'>([['arena', 'Crossfire'], ['bookyard', 'Bookyard']], s.mapId, v => { s.mapId = v; saveSettings(s); })));
+    card.appendChild(this.row('Map', this.seg<'foundry' | 'arena' | 'bookyard'>([['foundry', 'Foundry'], ['arena', 'Crossfire'], ['bookyard', 'Bookyard']], s.mapId, v => { s.mapId = v; saveSettings(s); })));
     card.appendChild(this.row('Camera', this.seg<'first' | 'third'>([['first', 'First person'], ['third', 'Third person']], s.cameraMode, v => { s.cameraMode = v; saveSettings(s); })));
+    card.appendChild(this.row('Character', this.seg<'armored' | 'robot' | 'stickman'>([['armored', 'Armored'], ['robot', 'Yellow robot'], ['stickman', 'Stickman']], s.character, v => { s.character = v; saveSettings(s); this.cb.settingsChanged(); })));
     const wallet = document.createElement('div');
     wallet.className = 'wallet';
     wallet.textContent = `${this.profile.data.ink} INK  /  LEVEL ${this.profile.level}`;
@@ -163,7 +164,7 @@ export class Menus {
     card.appendChild(this.btn('Settings', () => this.showSettings('main')));
     const help = document.createElement('div');
     help.className = 'help small';
-    help.innerHTML = `<kbd>WASD</kbd> move · <kbd>Space</kbd> jump (hold to bhop) · <kbd>Shift</kbd> crouch / slide · <kbd>LMB</kbd> fire · <kbd>RMB</kbd> aim / scope / heavy · <kbd>R</kbd> reload · <kbd>1-4</kbd>/wheel swap · <kbd>V</kbd> camera · <kbd>Q</kbd> shoulder · <kbd>H</kbd> hit regions (range) · <kbd>Tab</kbd> scores · <kbd>Esc</kbd> pause`;
+    help.innerHTML = `<kbd>WASD</kbd> move · <kbd>Space</kbd> jump (press again in the air to double jump) · <kbd>Shift</kbd> dash · <kbd>C</kbd> crouch / slide · <kbd>LMB</kbd> fire · <kbd>RMB</kbd> aim / scope · <kbd>R</kbd> reload · <kbd>1-4</kbd>/wheel swap · <kbd>Q</kbd> shoulder · <kbd>V</kbd> camera · <kbd>T</kbd> reset practice · <kbd>H</kbd> hit regions (practice) · <kbd>Tab</kbd> scores · <kbd>Esc</kbd> pause`;
     card.appendChild(help);
     this.main.appendChild(card);
   }
@@ -291,6 +292,7 @@ export class Menus {
         })),
       );
     card.appendChild(this.row('Camera', this.seg<'first' | 'third'>([['first', 'First person'], ['third', 'Third person']], s.cameraMode, v => { s.cameraMode = v; saveSettings(s); })));
+    card.appendChild(this.row('Character', this.seg<'armored' | 'robot' | 'stickman'>([['armored', 'Armored'], ['robot', 'Yellow robot'], ['stickman', 'Stickman']], s.character, v => { s.character = v; saveSettings(s); this.cb.settingsChanged(); })));
     tog('FOV kick', () => s.fovKick, (v) => (s.fovKick = v));
     tog('Damage numbers', () => s.damageNumbers, (v) => (s.damageNumbers = v));
     tog('Hit regions', () => s.showHitboxes, (v) => (s.showHitboxes = v));

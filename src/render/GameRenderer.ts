@@ -12,6 +12,26 @@ import { Effects } from './Effects';
 import { HitboxDebug } from './HitboxDebug';
 import { buildMapMesh } from './mapMesh';
 import { Viewmodel, adsEase } from './Viewmodel';
+import { ADS_CAMERA_FORWARD, adsBlend } from '../config/weaponModels';
+import { RobotRenderer, robotAssets } from './robot/RobotRenderer';
+
+/** Shoulder camera tuning (metres, in the aim frame). See docs/SNIPER_UPGRADE.md. */
+export const CAM = { right: 0.62, up: 0.2, back: 2.35 };
+
+const camTmp = new THREE.Vector3();
+const camTmp2 = new THREE.Vector3();
+const camTmp3 = new THREE.Vector3();
+const camTmp4 = new THREE.Vector3();
+
+/** What App and the HUD need from whichever character renderer is active. */
+export interface CharacterView {
+  readonly group: THREE.Group;
+  reset(): void;
+  wound(id: number, pos: { x: number; y: number; z: number }, yaw: number): void;
+  hurt(id: number, dirX: number, dirZ: number): void;
+  kill(f: Fighter, dir: { x: number; y: number; z: number }, headshot: boolean): void;
+  headOf(id: number): THREE.Vector3 | null;
+}
 
 class Spring {
   x = 0;
@@ -76,7 +96,9 @@ export class GameRenderer {
   readonly effects = new Effects();
   readonly objective = new ObjectiveMarker();
   readonly viewmodel = new Viewmodel();
-  readonly characters: CharacterRenderer;
+  readonly stick: CharacterRenderer;
+  robots: RobotRenderer | null = null;
+  useRobot = false;
   readonly hitboxes = new HitboxDebug();
   private mapGroup: THREE.Group | null = null;
   private world: World | null = null;
@@ -102,7 +124,18 @@ export class GameRenderer {
   fovKickOn = true;
   private hitStopT = 0;
   thirdPersonActive = false;
-  private shoulderOffset = 0.8;
+  /** camera rig state */
+  private shoulderSide = 1;
+  private camFrac = 1;
+  private rigPrev = { id: -1, r: 0, u: 0, b: 0, frac: 1 };
+  /** view correction this frame (App adds it to the input angles) */
+  readonly aimFix = { yaw: 0, pitch: 0 };
+  /** camera position relative to the sim eye (sent with each command as the aim origin) */
+  readonly aimOffset = { x: 0, y: 0, z: 0 };
+  renderYaw = 0;
+  renderPitch = 0;
+  private localBodyVisible = true;
+  private hideHead = false;
   private rings: THREE.Object3D[] = [];
   readonly zoom: ZoomInfo = { vfov: 1, baseVfov: 1, adsE: 0, scopeCover: 0, eyepiece: null };
   /** live scope image for the sniper eyepiece while it approaches the eye */
@@ -122,9 +155,27 @@ export class GameRenderer {
     const sun = new THREE.DirectionalLight(0xffffff, 1.6);
     sun.position.set(0.4, 1, 0.25);
     this.scene.add(sun);
-    this.characters = new CharacterRenderer(this.effects);
-    this.scene.add(this.characters.group, this.effects.group, this.hitboxes.group, this.objective.group);
+    this.stick = new CharacterRenderer(this.effects);
+    this.scene.add(this.stick.group, this.effects.group, this.hitboxes.group, this.objective.group);
     this.resize();
+  }
+
+  /** the active character renderer */
+  get characters(): CharacterView {
+    return this.useRobot && this.robots ? this.robots : this.stick;
+  }
+
+  /** Switch the playable character's presentation (robot needs its assets loaded). */
+  setCharacter(kind: 'armored' | 'robot' | 'stickman') {
+    const A = robotAssets();
+    if (kind !== 'stickman' && A && !this.robots) {
+      this.robots = new RobotRenderer(this.effects, A);
+      this.scene.add(this.robots.group);
+    }
+    this.useRobot = kind !== 'stickman' && !!this.robots;
+    if (this.robots && kind !== 'stickman') this.robots.playerChar = kind;
+    this.stick.group.visible = !this.useRobot;
+    if (this.robots) this.robots.group.visible = this.useRobot;
   }
 
   resize() {
@@ -157,7 +208,8 @@ export class GameRenderer {
         }
       });
     }
-    this.characters.reset();
+    this.stick.reset();
+    this.robots?.reset();
     this.effects.clear();
     this.world = world;
     this.mapGroup = buildMapMesh(map);
@@ -272,38 +324,92 @@ export class GameRenderer {
       const sh = this.shake * this.shake * ms * (1 - this.zoom.scopeCover);
       const shakeRoll = (Math.random() - 0.5) * sh * 0.02;
 
-      this.camera.position.set(px + bobX * cy, camY, pz - bobX * sy);
+      // ---- camera rig: shoulder camera that slides into the eye as ADS completes (3rd -> 1st person) ----
+      const robot = this.useRobot;
+      const tp = !!fi.thirdPerson && me.alive;
+      const adsC = adsBlend(ads); // same curve the weapon frame uses, so sights meet the eye together
+      const side = fi.shoulder ?? 1;
+      this.shoulderSide += (side - this.shoulderSide) * (1 - Math.exp(-14 * dt));
+      // local offset in the aim frame: right, up, back (metres)
+      const hipR = tp ? CAM.right * this.shoulderSide : 0, hipU = tp ? CAM.up : 0, hipB = tp ? CAM.back : 0;
+      const keep = robot || !def.scope ? 1 - adsC : Math.max(0, 1 - ads * 4); // stickman scopes cut straight to the viewmodel
+      // robots end inside the sights: ADS_CAMERA_FORWARD ahead of the eye (negative 'back')
+      let lr = hipR * keep, lu = hipU * keep, lb = hipB * keep - (robot ? ADS_CAMERA_FORWARD * adsC : 0);
+      let viewYaw = fi.viewYaw, viewPitch = fi.viewPitch;
+      const eyeX = px, eyeY = py + this.eyeH + (tp ? 0 : this.stepOff + bobY + this.dip.x * 0.35 * ms), eyeZ = pz;
+      const offsetAt = (yawA: number, pitchA: number, r: number, u: number, bk: number, frac: number, out: THREE.Vector3) => {
+        const cpp = Math.cos(pitchA), spp = Math.sin(pitchA), syy = Math.sin(yawA), cyy = Math.cos(yawA);
+        // forward f, right rt, up (pitched) u
+        const fx = -syy * cpp, fy = spp, fz = -cyy * cpp;
+        const ux = syy * spp, uy = cpp, uz = cyy * spp;
+        return out.set((cyy * r + ux * u - fx * bk) * frac, (uy * u - fy * bk) * frac, (-syy * r + uz * u - fz * bk) * frac);
+      };
+      // collision: compress instantly, return smoothly
+      const desired = offsetAt(viewYaw, viewPitch, lr, lu, lb, 1, camTmp);
+      const pivot = { x: eyeX, y: eyeY, z: eyeZ };
+      let frac = 1;
+      if (desired.lengthSq() > 1e-6) {
+        const safe = clipCamera(world, pivot, { x: eyeX + desired.x, y: eyeY + desired.y, z: eyeZ + desired.z });
+        frac = Math.hypot(safe.x - eyeX, safe.y - eyeY, safe.z - eyeZ) / desired.length();
+      }
+      this.camFrac = frac < this.camFrac ? frac : this.camFrac + (frac - this.camFrac) * (1 - Math.exp(-5 * dt));
+      // aim-point coherence: when the rig (not the mouse) moves the camera, turn the view so the point
+      // under the reticle stays put; shots go along the camera ray, so what you aimed at is what you hit
+      this.aimFix.yaw = 0;
+      this.aimFix.pitch = 0;
+      const prev = offsetAt(viewYaw, viewPitch, this.rigPrev.r, this.rigPrev.u, this.rigPrev.b, this.rigPrev.frac, camTmp2);
+      const next = offsetAt(viewYaw, viewPitch, lr, lu, lb, this.camFrac, camTmp3);
+      if (me.alive && this.rigPrev.id === me.id && prev.distanceToSquared(next) > 1e-8) {
+        const kick0 = kickAt(me, renderTime);
+        const dir = camTmp4.set(0, 0, -1).applyEuler(new THREE.Euler(viewPitch + me.recoilPitch + kick0.pitch, viewYaw + me.recoilYaw + kick0.yaw, 0, 'YXZ'));
+        const o = { x: eyeX + prev.x, y: eyeY + prev.y, z: eyeZ + prev.z };
+        const hit = world.raycast(o, { x: dir.x, y: dir.y, z: dir.z }, 400);
+        const dist = hit ? hit.t : 400;
+        if (dist > 1.5) {
+          const tx = o.x + dir.x * dist - (eyeX + next.x), ty = o.y + dir.y * dist - (eyeY + next.y), tz = o.z + dir.z * dist - (eyeZ + next.z);
+          const ny = Math.atan2(-tx, -tz), np = Math.atan2(ty, Math.hypot(tx, tz));
+          let dy = ny - Math.atan2(-dir.x, -dir.z);
+          while (dy > Math.PI) dy -= Math.PI * 2;
+          while (dy < -Math.PI) dy += Math.PI * 2;
+          const dp = np - Math.atan2(dir.y, Math.hypot(dir.x, dir.z));
+          if (Math.abs(dy) < 0.2 && Math.abs(dp) < 0.2) {
+            this.aimFix.yaw = dy;
+            this.aimFix.pitch = dp;
+            viewYaw += dy;
+            viewPitch += dp;
+          }
+        }
+      }
+      this.rigPrev = { id: me.id, r: lr, u: lu, b: lb, frac: this.camFrac };
+      const off = offsetAt(viewYaw, viewPitch, lr, lu, lb, this.camFrac, camTmp);
+      this.camera.position.set(eyeX + off.x, eyeY + off.y, eyeZ + off.z);
+      if (!tp && me.alive) this.camera.position.x += bobX * cy, this.camera.position.z -= bobX * sy;
+      // aim origin for the sim (camera relative to the eye the sim uses this tick)
+      const simEye = me.pos.y + me.height - MOVE.eyeFromTop;
+      this.aimOffset.x = this.camera.position.x - me.pos.x;
+      this.aimOffset.y = this.camera.position.y - simEye;
+      this.aimOffset.z = this.camera.position.z - me.pos.z;
+      if (!me.alive) this.aimOffset.x = this.aimOffset.y = this.aimOffset.z = 0;
+      this.renderYaw = viewYaw;
+      this.renderPitch = viewPitch;
       if (me.alive) {
-        this.camera.rotation.set(fi.viewPitch + rp, fi.viewYaw + ry, this.roll + shakeRoll + Math.sin(this.bobPhase) * 0.002 * this.bobAmt * calm);
-      } else if (fi.deathLook) {
-        const q = this.camera.quaternion.clone();
-        this.camera.lookAt(fi.deathLook.x, fi.deathLook.y + 1.2, fi.deathLook.z);
-        q.slerp(this.camera.quaternion, 1 - Math.exp(-5 * dt));
-        this.camera.quaternion.copy(q);
+        this.camera.rotation.set(viewPitch + rp, viewYaw + ry, (tp ? 0 : this.roll) + shakeRoll + (tp ? 0 : Math.sin(this.bobPhase) * 0.002 * this.bobAmt * calm));
       } else {
-        this.camera.rotation.set(-0.5, fi.viewYaw, 0.2);
+        this.camera.position.set(px, camY, pz);
+        if (fi.deathLook) {
+          const q = this.camera.quaternion.clone();
+          this.camera.lookAt(fi.deathLook.x, fi.deathLook.y + 1.2, fi.deathLook.z);
+          q.slerp(this.camera.quaternion, 1 - Math.exp(-5 * dt));
+          this.camera.quaternion.copy(q);
+        } else this.camera.rotation.set(-0.5, fi.viewYaw, 0.2);
       }
-
-      // Camera is presentation only. Aim remains the fighter's eye ray and the HUD
-      // projects its actual impact, so shoulder peeking never creates a camera-origin shot.
-      this.thirdPersonActive = !!fi.thirdPerson && me.alive && !(def.scope && ads > 0.05);
-      if (this.thirdPersonActive) {
-        const side = (fi.shoulder ?? 1) * (0.8 - adsE * 0.35);
-        this.shoulderOffset += (side - this.shoulderOffset) * (1 - Math.exp(-16 * dt));
-        const back = 3.25 - adsE * 1.6;
-        const pivot = { x: px, y: py + this.eyeH, z: pz };
-        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
-        const desired = {
-          x: pivot.x - forward.x * back + cy * this.shoulderOffset,
-          y: pivot.y - forward.y * back + 0.22,
-          z: pivot.z - forward.z * back - sy * this.shoulderOffset,
-        };
-        const safe = clipCamera(world, pivot, desired);
-        this.camera.position.set(safe.x, safe.y, safe.z);
-        // Hide the local body only if collision pulled the camera into it (3D, so looking straight
-        // up or down keeps the over-the-shoulder view instead of dropping to first person).
-        if (Math.hypot(safe.x - pivot.x, safe.y - pivot.y, safe.z - pivot.z) < 0.55) { this.thirdPersonActive = false; this.camera.position.set(px + bobX * cy, camY, pz - bobX * sy); }
-      }
+      const camDist = off.length();
+      // the local body is drawn whenever the camera is outside the head; the robot keeps its arms and
+      // weapon in view all the way into first person, the stickman hands over to its viewmodel
+      this.thirdPersonActive = me.alive && camDist > 0.3;
+      this.localBodyVisible = robot ? true : camDist > 0.45 || !me.alive;
+      // the robot rigs' heads (hair, helmet) reach well past 0.45 m from the eye: clear them early in ADS
+      this.hideHead = robot && me.alive && camDist < 0.9;
 
       // ---- FOV: speed kick at hip, iron-sight zoom, scope zoom synced with the overlay ----
       const speedKick = Math.max(0, Math.min(1, (hs - MOVE.maxSpeed * 0.9) / 6));
@@ -327,7 +433,9 @@ export class GameRenderer {
       this.zoom.adsE = adsE;
       this.zoom.scopeCover = scopeCover;
 
-      // ---- viewmodel ----
+      // ---- viewmodel (stickman first person only; the robot's own arms and weapon are the viewmodel) ----
+      if (this.useRobot) this.zoom.eyepiece = null;
+      else {
       const slot = me.weapons[me.cur];
       const reloading = me.reloadTimer > 0 && def.reloadTime > 0;
       let boltProgress = -1;
@@ -355,12 +463,21 @@ export class GameRenderer {
         scopeCover,
       });
       this.zoom.eyepiece = this.viewmodel.eyepiece;
+      }
     }
     this.camera.updateMatrixWorld();
     this.objective.update(fi.objective, fi.localId);
 
     // ---------------- world ----------------
-    this.characters.update(worldDt, fi.fighters, a, renderTime, fi.orbit || this.thirdPersonActive ? -1 : fi.spectateId, world, this.camera);
+    if (this.useRobot && this.robots) {
+      this.robots.update(worldDt, fi.fighters, a, renderTime, world, this.camera, {
+        hideHeadOf: this.hideHead && !fi.orbit ? fi.spectateId : -1,
+        hideGunOf: this.zoom.scopeCover > 0.02 && !fi.orbit ? fi.spectateId : -1,
+        localId: fi.orbit ? -1 : fi.spectateId,
+        viewYaw: this.renderYaw,
+        viewPitch: this.renderPitch,
+      });
+    } else this.stick.update(worldDt, fi.fighters, a, renderTime, fi.orbit || this.localBodyVisible ? -1 : fi.spectateId, world, this.camera);
     this.hitboxes.update(fi.fighters, fi.spectateId);
     this.effects.camPos.copy(this.camera.position);
     this.effects.setWorld(world);
@@ -370,7 +487,7 @@ export class GameRenderer {
     // full-screen scope shows inside a circle of the same on-screen size, so the hand-off is seamless
     const lens = this.viewmodel.scopeLens;
     const ep = this.zoom.eyepiece;
-    const sniperUp = !this.thirdPersonActive && !!me && me.alive && me.weapons[me.cur].id === 'sniper' && this.zoom.adsE > 0.02 && this.zoom.scopeCover < 0.999 && !!ep;
+    const sniperUp = !this.useRobot && !this.localBodyVisible && !!me && me.alive && me.weapons[me.cur].id === 'sniper' && this.zoom.adsE > 0.02 && this.zoom.scopeCover < 0.999 && !!ep;
     if (sniperUp && ep) {
       if (!this.lensDark) this.lensDark = lens.material as THREE.Material;
       lens.material = this.lensMat;
@@ -390,7 +507,7 @@ export class GameRenderer {
 
     this.renderer.clear();
     this.renderer.render(this.scene, this.camera);
-    if (me && !this.thirdPersonActive && this.zoom.scopeCover < 0.999) {
+    if (me && !this.useRobot && !this.localBodyVisible && this.zoom.scopeCover < 0.999) {
       this.renderer.clearDepth();
       this.renderer.render(this.viewmodel.scene, this.viewmodel.camera);
     }

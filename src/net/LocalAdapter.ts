@@ -44,6 +44,10 @@ export class LocalAdapter implements NetworkAdapter {
     return this.m.drainEvents();
   }
 
+  resetPractice() {
+    this.m.resetPractice();
+  }
+
   stop() {
     this.match = null;
   }

@@ -70,12 +70,15 @@ export class BotBrain {
   lookAround = 0;
   wantSlot = 0;
   scopeHold = 0;
+  dblPending = false;
 
   constructor(
     private f: Fighter,
     private diff: DifficultyDef,
     private nav: NavGraph,
     private rng: () => number,
+    /** practice-mode mover: runs the same brain and movement but never fires */
+    private passive = false,
   ) {
     this.aimYaw = f.yaw;
   }
@@ -293,6 +296,7 @@ export class BotBrain {
     let lookYaw: number | null = null;
     let jump = false;
     let crouch = false;
+    let dash = false;
 
     const follow = () => {
       if (this.arrived()) return false;
@@ -306,7 +310,11 @@ export class BotBrain {
       wishX = dx / hd;
       wishZ = dz / hd;
       const prev = this.pathIdx > 0 ? this.path[this.pathIdx - 1] : this.nav.nearest(f.pos);
-      if ((this.nav.edgeIsJump(prev, this.path[this.pathIdx]) || node.y - f.pos.y > 0.6) && hd < 2.2) jump = true;
+      const kind = this.nav.edgeKind(prev, this.path[this.pathIdx]);
+      if ((kind !== 'walk' || node.y - f.pos.y > 0.6) && hd < 2.2 && f.onGround) {
+        jump = true;
+        this.dblPending = kind === 'double' || node.y - f.pos.y > 1.3;
+      }
       return true;
     };
 
@@ -358,6 +366,7 @@ export class BotBrain {
           wishX += toX * push;
           wishZ += toZ * push;
           if (!planted && this.rng() < dt * d.jumpRate) jump = true;
+          if (!planted && this.rng() < dt * d.jumpRate * 0.4) dash = true;
         } else if (this.lastSeen) {
           if (!this.goal) this.goTo(this.lastSeen);
           follow();
@@ -553,7 +562,17 @@ export class BotBrain {
       cmd.forward = clamp(-sy * nx - cy * nz, -1, 1);
       cmd.strafe = clamp(cy * nx - sy * nz, -1, 1);
     }
+    if (this.passive) {
+      fire = false;
+      ads = false;
+    }
+    // double jump: release after take-off, press again near the apex (a held key never air-jumps)
+    if (this.dblPending && !f.onGround) {
+      jump = f.vel.y < 1.2 && !(f.prevButtons & BTN.JUMP);
+      if (jump) this.dblPending = false;
+    } else if (this.dblPending && f.onGround && f.vel.y <= 0 && !jump) this.dblPending = false;
     if (jump) cmd.buttons |= BTN.JUMP;
+    if (dash && !(f.prevButtons & BTN.DASH)) cmd.buttons |= BTN.DASH;
     if (crouch) cmd.buttons |= BTN.CROUCH;
     if (fire) cmd.buttons |= BTN.FIRE;
     if (ads) cmd.buttons |= BTN.ADS;

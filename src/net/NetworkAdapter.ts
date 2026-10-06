@@ -24,5 +24,7 @@ export interface NetworkAdapter {
   map(): MapDef;
   world(): World;
   drainEvents(): GameEvent[];
+  /** practice mode: put everyone back at their start (no-op elsewhere) */
+  resetPractice(): void;
   stop(): void;
 }

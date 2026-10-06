@@ -3,12 +3,12 @@ import type { Difficulty, GameMode } from '../sim/types';
 
 export type Action =
   | 'forward' | 'back' | 'left' | 'right' | 'jump' | 'crouch'
-  | 'fire' | 'ads' | 'reload' | 'weapon1' | 'weapon2' | 'weapon3' | 'weapon4' | 'scoreboard' | 'hitboxes' | 'camera' | 'shoulder';
+  | 'fire' | 'ads' | 'reload' | 'weapon1' | 'weapon2' | 'weapon3' | 'weapon4' | 'scoreboard' | 'hitboxes' | 'camera' | 'shoulder' | 'dash' | 'reset';
 
 export const ACTION_LABELS: Record<Action, string> = {
   forward: 'Forward', back: 'Back', left: 'Left', right: 'Right', jump: 'Jump', crouch: 'Crouch / Slide',
   fire: 'Fire', ads: 'Aim (ADS) / Heavy', reload: 'Reload', weapon1: 'Slot 1', weapon2: 'Slot 2', weapon3: 'Slot 3', weapon4: 'Slot 4',
-  scoreboard: 'Scoreboard', hitboxes: 'Hit regions (range)', camera: 'First / third person', shoulder: 'Swap shoulder',
+  scoreboard: 'Scoreboard', hitboxes: 'Hit regions (range)', camera: 'First / third person', shoulder: 'Swap shoulder', dash: 'Dash', reset: 'Reset training',
 };
 
 export interface Settings {
@@ -35,7 +35,9 @@ export interface Settings {
   primary: PrimaryId;
   cameraMode: 'first' | 'third';
   shoulder: -1 | 1;
-  mapId: 'arena' | 'bookyard';
+  mapId: 'foundry' | 'arena' | 'bookyard';
+  /** playable development character (presentation only: same controller and shooting) */
+  character: 'armored' | 'robot' | 'stickman';
   mode: GameMode;
   crosshairColor: string;
   keys: Record<Action, string>;
@@ -58,21 +60,22 @@ export const DEFAULT_SETTINGS: Settings = {
   playerName: 'You',
   difficulty: 'easy',
   botCount: 6,
-  primary: 'ar',
-  cameraMode: 'first',
+  primary: 'sniper',
+  cameraMode: 'third',
   shoulder: 1,
-  mapId: 'arena',
+  mapId: 'foundry',
+  character: 'armored',
   mode: 'range',
   crosshairColor: '#1b1b24',
   keys: {
-    forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', crouch: 'ShiftLeft',
+    forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', crouch: 'KeyC',
     fire: 'Mouse0', ads: 'Mouse2', reload: 'KeyR', weapon1: 'Digit1', weapon2: 'Digit2', weapon3: 'Digit3', weapon4: 'Digit4',
-    scoreboard: 'Tab', hitboxes: 'KeyH', camera: 'KeyV', shoulder: 'KeyQ',
+    scoreboard: 'Tab', hitboxes: 'KeyH', camera: 'KeyV', shoulder: 'KeyQ', dash: 'ShiftLeft', reset: 'KeyT',
   },
 };
 
-const KEY = 'stickfight.settings.v2';
-const OLD_KEY = 'stickfight.settings.v1';
+const KEY = 'stickfight.settings.v3';
+const OLD_KEY = 'stickfight.settings.v2';
 
 function sanitize(p: Partial<Settings> & { volume?: number; cameraBob?: number }): Settings {
   const s: Settings = { ...structuredClone(DEFAULT_SETTINGS), ...p, keys: { ...DEFAULT_SETTINGS.keys, ...(p.keys ?? {}) } };
@@ -81,8 +84,9 @@ function sanitize(p: Partial<Settings> & { volume?: number; cameraBob?: number }
   if (p.cameraBob !== undefined && p.cameraShake === undefined) s.cameraShake = p.cameraBob;
   if (!['ar', 'sniper', 'smg', 'carbine'].includes(s.primary)) s.primary = 'ar';
   if (!['ffa', 'range', 'sketch'].includes(s.mode)) s.mode = 'range';
-  if (s.cameraMode !== 'third') s.cameraMode = 'first';
-  if (s.mapId !== 'bookyard') s.mapId = 'arena';
+  if (s.cameraMode !== 'first') s.cameraMode = 'third';
+  if (!['foundry', 'arena', 'bookyard'].includes(s.mapId)) s.mapId = 'foundry';
+  if (!['armored', 'robot', 'stickman'].includes(s.character)) s.character = 'armored';
   s.shoulder = s.shoulder === -1 ? -1 : 1;
   s.botCount = Math.max(1, Math.min(8, Math.round(s.botCount || 6)));
   s.fov = Math.max(70, Math.min(120, s.fov));
@@ -93,9 +97,18 @@ function sanitize(p: Partial<Settings> & { volume?: number; cameraBob?: number }
 
 export function loadSettings(): Settings {
   try {
-    const raw = localStorage.getItem(KEY) ?? localStorage.getItem(OLD_KEY);
-    if (!raw) return structuredClone(DEFAULT_SETTINGS);
-    return sanitize(JSON.parse(raw));
+    const raw = localStorage.getItem(KEY);
+    if (raw) return sanitize(JSON.parse(raw));
+    // older saves keep their preferences but take the new bindings (C crouch, Shift dash) and the
+    // third-person sniper defaults
+    const old = localStorage.getItem(OLD_KEY);
+    if (!old) return structuredClone(DEFAULT_SETTINGS);
+    const p = JSON.parse(old) as Partial<Settings>;
+    delete p.keys;
+    delete p.cameraMode;
+    delete p.mapId;
+    delete p.primary;
+    return sanitize(p);
   } catch {
     return structuredClone(DEFAULT_SETTINGS);
   }

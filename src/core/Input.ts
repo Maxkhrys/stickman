@@ -16,11 +16,14 @@ export class Input {
   frameDY = 0;
   /** sensitivity scale set every frame by the game (FOV compensation x ADS/scope multiplier) */
   sensScale = 1;
+  /** camera position relative to the eye, written by the renderer each frame (shot aim origin) */
+  readonly aimOffset = { x: 0, y: 0, z: 0 };
   /** timestamp of the last fire-button press (for latency measurement) */
   lastFirePress = 0;
   onToggleHitboxes: (() => void) | null = null;
   onToggleCamera: (() => void) | null = null;
   onSwapShoulder: (() => void) | null = null;
+  onReset: (() => void) | null = null;
   private requestingLock = false;
   private held = new Set<string>();
   private latched = new Set<string>();
@@ -82,7 +85,9 @@ export class Input {
       },
       { passive: true },
     );
+    // focus loss / hidden tab: nothing stays held (keyups are never delivered to a background tab)
     window.addEventListener('blur', () => this.clear());
+    document.addEventListener('visibilitychange', () => { if (document.hidden) this.clear(); });
   }
 
   private press(code: string) {
@@ -98,6 +103,7 @@ export class Input {
     if (fresh && code === k.hitboxes) this.onToggleHitboxes?.();
     if (fresh && code === k.camera) this.onToggleCamera?.();
     if (fresh && code === k.shoulder) this.onSwapShoulder?.();
+    if (fresh && code === k.reset) this.onReset?.();
     if (code === k.scoreboard) this.onScoreboard?.(true);
   }
 
@@ -148,6 +154,7 @@ export class Input {
     if (this.down('fire')) buttons |= BTN.FIRE;
     if (this.down('ads')) buttons |= BTN.ADS;
     if (this.down('reload')) buttons |= BTN.RELOAD;
+    if (this.down('dash')) buttons |= BTN.DASH;
     const fwd = (this.down('forward') ? 1 : 0) - (this.down('back') ? 1 : 0);
     const str = (this.down('right') ? 1 : 0) - (this.down('left') ? 1 : 0);
     const cmd: InputCommand = {
@@ -159,6 +166,9 @@ export class Input {
       buttons,
       slot: this.slotReq,
       scroll: Math.max(-1, Math.min(1, this.scrollAcc)),
+      ox: this.aimOffset.x,
+      oy: this.aimOffset.y,
+      oz: this.aimOffset.z,
     };
     this.slotReq = -1;
     this.scrollAcc = 0;

@@ -12,10 +12,54 @@ export class World {
   readonly ramps: Ramp[];
   readonly bounds: MapDef['bounds'];
 
+  /** uniform-grid broadphase over the boxes (big maps have hundreds of them) */
+  private static readonly CELL = 4;
+  private readonly grid = new Map<number, number[]>();
+  private readonly stamp: Uint32Array;
+  private stampId = 0;
+  private readonly cand: Box[] = [];
+
   constructor(map: MapDef) {
     this.boxes = map.boxes;
     this.ramps = map.ramps;
     this.bounds = map.bounds;
+    this.stamp = new Uint32Array(this.boxes.length);
+    const C = World.CELL;
+    this.boxes.forEach((b, i) => {
+      for (let cx = Math.floor(b.min.x / C); cx <= Math.floor(b.max.x / C); cx++) {
+        for (let cz = Math.floor(b.min.z / C); cz <= Math.floor(b.max.z / C); cz++) {
+          const k = World.key(cx, cz);
+          const arr = this.grid.get(k);
+          if (arr) arr.push(i);
+          else this.grid.set(k, [i]);
+        }
+      }
+    });
+  }
+
+  private static key(cx: number, cz: number) {
+    return (cx + 4096) * 8192 + (cz + 4096);
+  }
+
+  /** Boxes whose grid cells touch the x/z rectangle (superset; callers still test exactly). */
+  candidates(x0: number, z0: number, x1: number, z1: number): Box[] {
+    const out = this.cand;
+    out.length = 0;
+    const C = World.CELL;
+    const id = ++this.stampId;
+    if (id === 0xffffffff) { this.stamp.fill(0); this.stampId = 1; }
+    for (let cx = Math.floor(x0 / C); cx <= Math.floor(x1 / C); cx++) {
+      for (let cz = Math.floor(z0 / C); cz <= Math.floor(z1 / C); cz++) {
+        const arr = this.grid.get(World.key(cx, cz));
+        if (!arr) continue;
+        for (const i of arr) {
+          if (this.stamp[i] === this.stampId) continue;
+          this.stamp[i] = this.stampId;
+          out.push(this.boxes[i]);
+        }
+      }
+    }
+    return out;
   }
 
   rampHeight(r: Ramp, x: number, z: number): number {
@@ -49,7 +93,7 @@ export class World {
   /** Highest walkable surface under a footprint of radius r whose top is <= maxY. */
   surfaceBelow(x: number, z: number, r: number, maxY: number): number {
     let best = 0;
-    for (const b of this.boxes) {
+    for (const b of this.candidates(x - r, z - r, x + r, z + r)) {
       if (b.max.y > maxY || b.max.y <= best) continue;
       if (x + r <= b.min.x || x - r >= b.max.x || z + r <= b.min.z || z - r >= b.max.z) continue;
       best = b.max.y;
@@ -69,7 +113,7 @@ export class World {
 
   /** Is an upright AABB (feet at y, radius r, height h) free of boxes and ramp solids? */
   isClear(x: number, y: number, z: number, r: number, h: number): boolean {
-    for (const b of this.boxes) {
+    for (const b of this.candidates(x - r, z - r, x + r, z + r)) {
       if (x + r <= b.min.x || x - r >= b.max.x) continue;
       if (z + r <= b.min.z || z - r >= b.max.z) continue;
       if (y + h <= b.min.y + 1e-3 || y >= b.max.y - 1e-3) continue;
@@ -82,7 +126,7 @@ export class World {
   /** Boxes overlapping an upright AABB. */
   overlapping(x: number, y: number, z: number, r: number, h: number, out: Box[]): Box[] {
     out.length = 0;
-    for (const b of this.boxes) {
+    for (const b of this.candidates(x - r, z - r, x + r, z + r)) {
       if (x + r <= b.min.x || x - r >= b.max.x) continue;
       if (z + r <= b.min.z || z - r >= b.max.z) continue;
       if (y + h <= b.min.y + 1e-3 || y >= b.max.y - 1e-3) continue;

@@ -348,7 +348,9 @@ export class App {
           this.sfx.kill(e.headshot);
           R.hitStop(0.06);
           const streak = killer.stats.streak;
-          const tag = e.headshot ? 'HEADSHOT' : e.backstab ? 'BACKSTAB' : streak >= 3 ? `${streak} STREAK` : '';
+          const style = [e.quickscope ? 'QUICKSCOPE' : '', e.airborne && e.weapon !== 'melee' ? 'AIRBORNE' : ''].filter(Boolean).join(' · ');
+          const base = e.headshot ? 'HEADSHOT' : e.backstab ? 'BACKSTAB' : streak >= 3 ? `${streak} STREAK` : '';
+          const tag = [base, style].filter(Boolean).join(' · ');
           this.hud.killNotice(victim.name, tag);
         }
         if (e.victim === local) {

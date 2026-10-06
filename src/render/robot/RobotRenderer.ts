@@ -53,6 +53,43 @@ export interface RobotAssets {
 let assets: RobotAssets | null = null;
 export const robotAssets = () => assets;
 
+// ---- distance LOD: a reduced index buffer over the same vertices (tools/asset/lod.mjs) ----
+/** fighters further than this from the camera draw the reduced meshes (metres, at a 70° vertical FOV) */
+export const LOD_DISTANCE = 14;
+const LOD_OF = new WeakMap<THREE.BufferGeometry, THREE.BufferGeometry>();
+const FULL_OF = new WeakMap<THREE.BufferGeometry, THREE.BufferGeometry>();
+
+async function attachLod(scene: THREE.Object3D, glbUrl: string) {
+  let mesh: THREE.Mesh | null = null;
+  scene.traverse((o) => { if ((o as THREE.Mesh).isMesh && !mesh) mesh = o as THREE.Mesh; });
+  if (!mesh) return;
+  try {
+    const res = await fetch(glbUrl.replace(/\.glb$/, '.lod.bin'));
+    if (!res.ok) return;
+    const buf = await res.arrayBuffer();
+    const n = new DataView(buf).getUint32(0, true);
+    const full = (mesh as THREE.Mesh).geometry;
+    const lod = new THREE.BufferGeometry();
+    for (const k of Object.keys(full.attributes)) lod.setAttribute(k, full.attributes[k]);
+    lod.setIndex(new THREE.BufferAttribute(new Uint32Array(buf, 4, n), 1));
+    lod.boundingBox = full.boundingBox;
+    lod.boundingSphere = full.boundingSphere;
+    LOD_OF.set(full, lod);
+    FULL_OF.set(lod, full);
+  } catch { /* LOD is optional: full detail everywhere */ }
+}
+
+/** Swap every mesh under obj to its reduced or full geometry (no-op when already there). */
+function useLod(obj: THREE.Object3D, on: boolean) {
+  obj.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const full = FULL_OF.get(m.geometry) ?? m.geometry;
+    const want = on ? LOD_OF.get(full) ?? full : full;
+    if (m.geometry !== want) m.geometry = want;
+  });
+}
+
 /** Load the robot, its baked clips and the weapon models (call once before the robot renderer is used). */
 export async function loadRobotAssets(base = '/'): Promise<RobotAssets> {
   if (assets) return assets;
@@ -61,6 +98,10 @@ export async function loadRobotAssets(base = '/'): Promise<RobotAssets> {
   const [charLoads, guns] = await Promise.all([
     Promise.all(keys.map((k) => Promise.all([loader.loadAsync(base + CHARACTERS[k].glb), loadClipLibrary(base + CHARACTERS[k].anims)]))),
     Promise.all((Object.keys(WEAPON_MODELS) as ModelKey[]).map((k) => loader.loadAsync(base + WEAPON_MODELS[k].url!))),
+  ]);
+  await Promise.all([
+    ...keys.map((k, i) => attachLod(charLoads[i][0].scene, base + CHARACTERS[k].glb)),
+    ...(Object.keys(WEAPON_MODELS) as ModelKey[]).map((k, i) => attachLod(guns[i].scene, base + WEAPON_MODELS[k].url!)),
   ]);
   const weapons = {} as Record<ModelKey, THREE.Object3D>;
   (Object.keys(WEAPON_MODELS) as ModelKey[]).forEach((k, i) => {
@@ -196,6 +237,8 @@ function twoBoneIK(A: THREE.Bone, B: THREE.Bone, C: THREE.Bone, target: THREE.Ve
 
 // ---------------------------------------------------------------------------- per-fighter state
 interface RobotState {
+  /** drawing the reduced meshes (far from the camera) */
+  lod: boolean;
   key: CharKey;
   ch: CharAsset;
   root: THREE.Group;
@@ -250,6 +293,7 @@ export class RobotRenderer {
   private shadows: THREE.InstancedMesh;
   private frustum = new THREE.Frustum();
   private camPos = new THREE.Vector3();
+  private sphere = new THREE.Sphere(new THREE.Vector3(), 1.6);
   private wf: WeaponFrame | null = null;
   /** counts for the perf overlay */
   drawn = 0;
@@ -320,7 +364,7 @@ export class RobotRenderer {
       phase: 0, facing: f.yaw, guns: {}, gunKey: null,
       wasGround: true, landT: 9, airT: 0, hurtT: 0, hurtX: 0, hurtZ: 0,
       dead: false, deadT: 0, deathDir: new THREE.Vector3(), lastShot: -99,
-      sk: createSkeleton(), head: new THREE.Vector3(), visibleLast: true,
+      sk: createSkeleton(), head: new THREE.Vector3(), visibleLast: true, lod: false,
     };
     this.chars.set(f.id, c);
     this.group.add(root);
@@ -369,6 +413,8 @@ export class RobotRenderer {
     this.frustum.setFromProjectionMatrix(tm);
     let shadowN = 0;
     this.drawn = 0;
+    const pc = camera as THREE.PerspectiveCamera;
+    const zoomK = pc.isPerspectiveCamera ? Math.tan((pc.fov * Math.PI) / 360) / Math.tan((70 * Math.PI) / 360) : 1;
     for (const f of fighters) {
       const c = this.stateOf(f);
       if (f.alive && c.dead) {
@@ -380,8 +426,8 @@ export class RobotRenderer {
       const py = f.prevPos.y + (f.pos.y - f.prevPos.y) * alpha;
       const pz = f.prevPos.z + (f.pos.z - f.prevPos.z) * alpha;
       // cull: off-screen robots skip animation entirely
-      const sphere = new THREE.Sphere(tv.set(px, py + 1, pz), 1.6);
-      const onScreen = this.frustum.intersectsSphere(sphere);
+      this.sphere.center.set(px, py + 1, pz);
+      const onScreen = this.frustum.intersectsSphere(this.sphere);
       if (c.dead) {
         c.deadT += dt;
         if (c.deadT > 1.4) {
@@ -392,6 +438,9 @@ export class RobotRenderer {
       c.root.visible = onScreen;
       if (!onScreen) continue;
       this.drawn++;
+      // screen size decides, so a scope's zoom brings full detail back
+      const far = f.id !== view.localId && Math.hypot(px - this.camPos.x, py + 1 - this.camPos.y, pz - this.camPos.z) * zoomK > LOD_DISTANCE;
+      if (far !== c.lod) { c.lod = far; useLod(c.model, far); }
       this.animate(f, c, dt, alpha, time, px, py, pz, world, view);
       if (!c.dead) {
         const floor = world.surfaceBelow(px, pz, 0.2, py + 0.1);
@@ -553,6 +602,7 @@ export class RobotRenderer {
         this.group.add(gun);
       }
       gun.visible = c.root.visible && f.alive && !gunHidden;
+      useLod(gun, c.lod);
       this.wf = weaponFrame(eye, aimYaw, aimPitch, weapon, ads, this.wf ?? undefined)!;
       const w = this.wf;
       const mdl = WEAPON_MODELS[key];

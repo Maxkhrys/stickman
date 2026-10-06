@@ -70,6 +70,18 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--paper)
 .bar { height: 16px; border: 3px solid var(--ink); border-radius: 4px 9px 5px 8px; background: #fff; overflow: hidden; margin-top: 2px; }
 .bar > div { height: 100%; background: repeating-linear-gradient(-45deg, var(--pink), var(--pink) 8px, #ff6fae 8px, #ff6fae 14px); transition: width 0.12s; }
 .bar.low > div { background: repeating-linear-gradient(-45deg, #ff3355, #ff3355 8px, #ff6677 8px, #ff6677 14px); }
+/* movement resources: dash charges + air jump / air dash */
+.move { left: 24px; bottom: 96px; display: flex; align-items: center; gap: 6px; }
+.move .lbl { font-size: 15px; margin-right: 2px; }
+.move .lbl.air { margin-left: 10px; }
+.move .pip { position: relative; width: 16px; height: 16px; border: 2.5px solid var(--ink); border-radius: 50% 45% 50% 40%; background: #fff; overflow: hidden; }
+.move .pip > b { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: #9fc9ff; }
+.move .pip.full > b { background: var(--yellow); }
+.move .pip.aj.full, .move .pip.ad.full { background: var(--yellow); }
+/* sniper readiness bar under the crosshair */
+.ready { position: absolute; left: 50%; top: calc(50% + 34px); width: 64px; height: 5px; margin-left: -32px; border: 1.5px solid var(--ink); border-radius: 3px; background: rgba(255,255,255,0.7); overflow: hidden; }
+.ready > div { height: 100%; width: 0; background: #9fc9ff; }
+.ready.ok > div { background: var(--yellow); }
 .protect { font-family: var(--soft); font-size: 15px; margin-top: 4px; color: #a58a00; }
 .protect .pbar { height: 5px; width: 140px; border: 1.5px solid var(--ink); border-radius: 3px; background: #fff; overflow: hidden; }
 .protect .pbar > div { height: 100%; background: var(--yellow); }

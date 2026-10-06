@@ -153,7 +153,7 @@ export class Menus {
     card.append(diffRow, countRow, primRow);
     card.appendChild(this.row('Map', this.seg<'foundry' | 'arena' | 'bookyard'>([['foundry', 'Foundry'], ['arena', 'Crossfire'], ['bookyard', 'Bookyard']], s.mapId, v => { s.mapId = v; saveSettings(s); })));
     card.appendChild(this.row('Camera', this.seg<'first' | 'third'>([['first', 'First person'], ['third', 'Third person']], s.cameraMode, v => { s.cameraMode = v; saveSettings(s); })));
-    card.appendChild(this.row('Character', this.seg<'robot' | 'stickman'>([['robot', 'Robot'], ['stickman', 'Stickman']], s.character, v => { s.character = v; saveSettings(s); this.cb.settingsChanged(); })));
+    card.appendChild(this.row('Character', this.seg<'armored' | 'robot' | 'stickman'>([['armored', 'Armored'], ['robot', 'Yellow robot'], ['stickman', 'Stickman']], s.character, v => { s.character = v; saveSettings(s); this.cb.settingsChanged(); })));
     const wallet = document.createElement('div');
     wallet.className = 'wallet';
     wallet.textContent = `${this.profile.data.ink} INK  /  LEVEL ${this.profile.level}`;
@@ -292,7 +292,7 @@ export class Menus {
         })),
       );
     card.appendChild(this.row('Camera', this.seg<'first' | 'third'>([['first', 'First person'], ['third', 'Third person']], s.cameraMode, v => { s.cameraMode = v; saveSettings(s); })));
-    card.appendChild(this.row('Character', this.seg<'robot' | 'stickman'>([['robot', 'Robot'], ['stickman', 'Stickman']], s.character, v => { s.character = v; saveSettings(s); this.cb.settingsChanged(); })));
+    card.appendChild(this.row('Character', this.seg<'armored' | 'robot' | 'stickman'>([['armored', 'Armored'], ['robot', 'Yellow robot'], ['stickman', 'Stickman']], s.character, v => { s.character = v; saveSettings(s); this.cb.settingsChanged(); })));
     tog('FOV kick', () => s.fovKick, (v) => (s.fovKick = v));
     tog('Damage numbers', () => s.damageNumbers, (v) => (s.damageNumbers = v));
     tog('Hit regions', () => s.showHitboxes, (v) => (s.showHitboxes = v));

@@ -31,12 +31,23 @@ import { loadClipLibrary, PoseAccumulator, type Clip, type ClipLibrary } from '.
 const ROBOT_SCALE = 1.8;
 type ModelKey = keyof typeof WEAPON_MODELS;
 
-export interface RobotAssets {
-  robot: THREE.Object3D;
+/** Skinned playable characters (both Mixamo-named rigs, 1 unit tall, retargeted per rig). */
+export type CharKey = 'armored' | 'robot';
+export const CHARACTERS: Record<CharKey, { glb: string; anims: string; label: string }> = {
+  armored: { glb: 'assets/armored/armored.glb', anims: 'assets/armored/anims.json', label: 'Armored' },
+  robot: { glb: 'assets/robot/robot.glb', anims: 'assets/robot/anims.json', label: 'Robot' },
+};
+
+export interface CharAsset {
+  scene: THREE.Object3D;
   lib: ClipLibrary;
-  weapons: Record<ModelKey, THREE.Object3D>;
   /** hand rotation relative to the weapon frame, measured from the aiming clip */
   gripRel: { right: THREE.Quaternion; left: THREE.Quaternion };
+}
+
+export interface RobotAssets {
+  chars: Record<CharKey, CharAsset>;
+  weapons: Record<ModelKey, THREE.Object3D>;
 }
 
 let assets: RobotAssets | null = null;
@@ -46,10 +57,10 @@ export const robotAssets = () => assets;
 export async function loadRobotAssets(base = '/'): Promise<RobotAssets> {
   if (assets) return assets;
   const loader = new GLTFLoader();
-  const [gltf, lib, ...guns] = await Promise.all([
-    loader.loadAsync(`${base}assets/robot/robot.glb`),
-    loadClipLibrary(`${base}assets/robot/anims.json`),
-    ...(Object.keys(WEAPON_MODELS) as ModelKey[]).map((k) => loader.loadAsync(base + WEAPON_MODELS[k].url!)),
+  const keys = Object.keys(CHARACTERS) as CharKey[];
+  const [charLoads, guns] = await Promise.all([
+    Promise.all(keys.map((k) => Promise.all([loader.loadAsync(base + CHARACTERS[k].glb), loadClipLibrary(base + CHARACTERS[k].anims)]))),
+    Promise.all((Object.keys(WEAPON_MODELS) as ModelKey[]).map((k) => loader.loadAsync(base + WEAPON_MODELS[k].url!))),
   ]);
   const weapons = {} as Record<ModelKey, THREE.Object3D>;
   (Object.keys(WEAPON_MODELS) as ModelKey[]).forEach((k, i) => {
@@ -64,16 +75,20 @@ export async function loadRobotAssets(base = '/'): Promise<RobotAssets> {
     });
     weapons[k] = s;
   });
-  gltf.scene.traverse((o) => {
-    const m = o as THREE.SkinnedMesh;
-    if (m.isSkinnedMesh) {
-      m.frustumCulled = false;
-      const mat = m.material as THREE.MeshStandardMaterial;
-      if (mat.isMeshStandardMaterial) { mat.metalness = Math.min(mat.metalness, 0.35); mat.roughness = Math.max(mat.roughness, 0.5); }
-    }
+  const chars = {} as Record<CharKey, CharAsset>;
+  keys.forEach((k, i) => {
+    const [gltf, lib] = charLoads[i];
+    gltf.scene.traverse((o) => {
+      const m = o as THREE.SkinnedMesh;
+      if (m.isSkinnedMesh) {
+        m.frustumCulled = false;
+        const mat = m.material as THREE.MeshStandardMaterial;
+        if (mat.isMeshStandardMaterial) { mat.metalness = Math.min(mat.metalness, 0.35); mat.roughness = Math.max(mat.roughness, 0.5); }
+      }
+    });
+    chars[k] = { scene: gltf.scene, lib, gripRel: calibrateGrip(gltf.scene, lib) };
   });
-  const gripRel = calibrateGrip(gltf.scene, lib);
-  assets = { robot: gltf.scene, lib, weapons, gripRel };
+  assets = { chars, weapons };
   return assets;
 }
 
@@ -181,6 +196,8 @@ function twoBoneIK(A: THREE.Bone, B: THREE.Bone, C: THREE.Bone, target: THREE.Ve
 
 // ---------------------------------------------------------------------------- per-fighter state
 interface RobotState {
+  key: CharKey;
+  ch: CharAsset;
   root: THREE.Group;
   model: THREE.Object3D;
   mesh: THREE.SkinnedMesh;
@@ -222,9 +239,12 @@ const BLEND_SPEED = { walk: 1.6, run: 3.8, sprint: 5.6 };
 export class RobotRenderer {
   readonly group = new THREE.Group();
   private chars = new Map<number, RobotState>();
-  private acc: PoseAccumulator;
-  private upperMask: Float32Array;
-  private lowerMask: Float32Array;
+  private acc!: PoseAccumulator;
+  private upperMask!: Float32Array;
+  private lowerMask!: Float32Array;
+  private masks = new Map<CharKey, { acc: PoseAccumulator; upper: Float32Array; lower: Float32Array }>();
+  /** what the local player plays as; everyone else wears the other skin so enemies read apart */
+  playerChar: CharKey = 'armored';
   private shadows: THREE.InstancedMesh;
   private frustum = new THREE.Frustum();
   private camPos = new THREE.Vector3();
@@ -233,16 +253,17 @@ export class RobotRenderer {
   drawn = 0;
 
   constructor(readonly effects: Effects, private A: RobotAssets, maxChars = 16) {
-    const nb = A.lib.bones.length;
-    this.acc = new PoseAccumulator(nb);
-    this.upperMask = new Float32Array(nb);
-    this.lowerMask = new Float32Array(nb);
-    A.lib.bones.forEach((name, j) => {
-      const upper = /Spine1|Spine2|Neck|Head|Shoulder|Arm|Hand/.test(name);
-      const spine = name === 'Spine';
-      this.upperMask[j] = upper ? 1 : spine ? 0.5 : 0;
-      this.lowerMask[j] = upper ? 0 : spine ? 0.5 : 1;
-    });
+    for (const k of Object.keys(A.chars) as CharKey[]) {
+      const bonesK = A.chars[k].lib.bones;
+      const upper = new Float32Array(bonesK.length), lower = new Float32Array(bonesK.length);
+      bonesK.forEach((name, j) => {
+        const up = /Spine1|Spine2|Neck|Head|Shoulder|Arm|Hand/.test(name);
+        const spine = name === 'Spine';
+        upper[j] = up ? 1 : spine ? 0.5 : 0;
+        lower[j] = up ? 0 : spine ? 0.5 : 1;
+      });
+      this.masks.set(k, { acc: new PoseAccumulator(bonesK.length), upper, lower });
+    }
     this.shadows = new THREE.InstancedMesh(
       new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ map: makeBlobTexture(), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }),
@@ -254,15 +275,32 @@ export class RobotRenderer {
   }
 
   reset() {
-    for (const c of this.chars.values()) this.group.remove(c.root);
+    for (const c of this.chars.values()) {
+      this.group.remove(c.root);
+      for (const g of Object.values(c.guns)) if (g) this.group.remove(g);
+    }
     this.chars.clear();
+  }
+
+  charFor(f: Fighter): CharKey {
+    if (f.kind === 'player') return this.playerChar;
+    return this.playerChar === 'armored' ? 'robot' : 'armored';
   }
 
   private stateOf(f: Fighter): RobotState {
     let c = this.chars.get(f.id);
+    const key = this.charFor(f);
+    if (c && c.key !== key) {
+      // skin changed (settings): rebuild this fighter
+      this.group.remove(c.root);
+      for (const g of Object.values(c.guns)) if (g) this.group.remove(g);
+      this.chars.delete(f.id);
+      c = undefined;
+    }
     if (c) return c;
+    const ch = this.A.chars[key];
     const root = new THREE.Group();
-    const model = SkeletonUtils.clone(this.A.robot);
+    const model = SkeletonUtils.clone(ch.scene);
     model.scale.setScalar(ROBOT_SCALE);
     root.add(model);
     let mesh!: THREE.SkinnedMesh;
@@ -272,9 +310,9 @@ export class RobotRenderer {
     mat.color.set(0xffffff).lerp(new THREE.Color(f.color), f.kind === 'player' ? 0 : 0.22);
     mesh.material = mat;
     const b = boneMap(model);
-    const bones = this.A.lib.bones.map((n) => b[n]);
+    const bones = ch.lib.bones.map((n) => b[n]);
     c = {
-      root, model, mesh, mat, bones, b,
+      key, ch, root, model, mesh, mat, bones, b,
       rest: bones.map((x) => x.quaternion.clone()),
       hipRest: b.Hips.position.clone(),
       phase: 0, facing: f.yaw, guns: {}, gunKey: null,
@@ -362,11 +400,15 @@ export class RobotRenderer {
     }
     this.shadows.count = shadowN;
     this.shadows.instanceMatrix.needsUpdate = true;
-    for (const [id, c] of this.chars) if (!fighters.some((f) => f.id === id)) { this.group.remove(c.root); this.chars.delete(id); }
+    for (const [id, c] of this.chars) if (!fighters.some((f) => f.id === id)) { this.group.remove(c.root); for (const g of Object.values(c.guns)) if (g) this.group.remove(g); this.chars.delete(id); }
   }
 
   private animate(f: Fighter, c: RobotState, dt: number, alpha: number, time: number, px: number, py: number, pz: number, world: World, view: RobotViewOptions) {
-    const L = this.A.lib.clips;
+    const L = c.ch.lib.clips;
+    const mk = this.masks.get(c.key)!;
+    this.acc = mk.acc;
+    this.upperMask = mk.upper;
+    this.lowerMask = mk.lower;
     const local = f.id === view.localId;
     const yaw = local && f.alive ? view.viewYaw : f.prevYaw + angleDelta(f.prevYaw, f.yaw) * alpha;
     const pitch = local && f.alive ? view.viewPitch : f.prevPitch + (f.pitch - f.prevPitch) * alpha;
@@ -560,13 +602,13 @@ export class RobotRenderer {
       const poleR = rp.clone().multiplyScalar(0.6).addScaledVector(up, -1);
       const poleL = rp.clone().multiplyScalar(-0.4).addScaledVector(up, -1);
       twoBoneIK(c.b.RightArm, c.b.RightForeArm, c.b.RightHand, gripTarget, poleR);
-      setWorldQuat(c.b.RightHand, tq.copy(qW).multiply(this.A.gripRel.right));
+      setWorldQuat(c.b.RightHand, tq.copy(qW).multiply(c.ch.gripRel.right));
       if (key === 'pistol') {
         // pistols: the support hand cups the trigger hand
         support = grip.clone().addScaledVector(rp, -0.045).addScaledVector(up, -0.02);
       }
       twoBoneIK(c.b.LeftArm, c.b.LeftForeArm, c.b.LeftHand, support, poleL, supportW);
-      if (reloadP < 0 || reloadP > 0.85) setWorldQuat(c.b.LeftHand, tq.copy(qW).multiply(this.A.gripRel.left));
+      if (reloadP < 0 || reloadP > 0.85) setWorldQuat(c.b.LeftHand, tq.copy(qW).multiply(c.ch.gripRel.left));
     } else {
       // melee / unarmed: relaxed arms from the idle clip
     }

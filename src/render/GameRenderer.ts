@@ -166,13 +166,14 @@ export class GameRenderer {
   }
 
   /** Switch the playable character's presentation (robot needs its assets loaded). */
-  setCharacter(kind: 'robot' | 'stickman') {
+  setCharacter(kind: 'armored' | 'robot' | 'stickman') {
     const A = robotAssets();
-    if (kind === 'robot' && A && !this.robots) {
+    if (kind !== 'stickman' && A && !this.robots) {
       this.robots = new RobotRenderer(this.effects, A);
       this.scene.add(this.robots.group);
     }
-    this.useRobot = kind === 'robot' && !!this.robots;
+    this.useRobot = kind !== 'stickman' && !!this.robots;
+    if (this.robots && kind !== 'stickman') this.robots.playerChar = kind;
     this.stick.group.visible = !this.useRobot;
     if (this.robots) this.robots.group.visible = this.useRobot;
   }

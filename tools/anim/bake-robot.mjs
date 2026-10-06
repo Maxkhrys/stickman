@@ -23,7 +23,7 @@ import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { robotSkeleton } from './robotRig.mjs';
 
 const FPS = 30;
-const ROBOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../public/assets/robot/robot.glb');
+const ROBOT = process.env.CHAR_GLB ? path.resolve(process.env.CHAR_GLB) : path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../public/assets/robot/robot.glb');
 const rig = robotSkeleton(ROBOT);
 
 // Every robot bone that skins something; finger tips and *_End are leaves with no weights.

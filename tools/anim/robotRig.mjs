@@ -11,7 +11,8 @@ export function readGlbJson(file) {
 /** Rebuild the bone hierarchy at its rest (= bind) pose. Names lose the "mixamorig:" prefix. */
 export function robotSkeleton(file) {
   const json = readGlbJson(file);
-  const joints = json.skins[0].joints;
+  // every mixamorig node, skinned or not: some exports leave the *_End / finger-tip leaves out of the skin
+  const joints = json.nodes.map((n, i) => (/^mixamorig/.test(n.name ?? '') ? i : -1)).filter((i) => i >= 0);
   const bones = {}, byIndex = {};
   for (const j of joints) {
     const n = json.nodes[j], b = new T.Bone();

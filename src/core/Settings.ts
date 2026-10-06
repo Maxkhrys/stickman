@@ -37,7 +37,7 @@ export interface Settings {
   shoulder: -1 | 1;
   mapId: 'foundry' | 'arena' | 'bookyard';
   /** playable development character (presentation only: same controller and shooting) */
-  character: 'robot' | 'stickman';
+  character: 'armored' | 'robot' | 'stickman';
   mode: GameMode;
   crosshairColor: string;
   keys: Record<Action, string>;
@@ -64,7 +64,7 @@ export const DEFAULT_SETTINGS: Settings = {
   cameraMode: 'third',
   shoulder: 1,
   mapId: 'foundry',
-  character: 'robot',
+  character: 'armored',
   mode: 'range',
   crosshairColor: '#1b1b24',
   keys: {
@@ -86,7 +86,7 @@ function sanitize(p: Partial<Settings> & { volume?: number; cameraBob?: number }
   if (!['ffa', 'range', 'sketch'].includes(s.mode)) s.mode = 'range';
   if (s.cameraMode !== 'first') s.cameraMode = 'third';
   if (!['foundry', 'arena', 'bookyard'].includes(s.mapId)) s.mapId = 'foundry';
-  if (s.character !== 'stickman') s.character = 'robot';
+  if (!['armored', 'robot', 'stickman'].includes(s.character)) s.character = 'armored';
   s.shoulder = s.shoulder === -1 ? -1 : 1;
   s.botCount = Math.max(1, Math.min(8, Math.round(s.botCount || 6)));
   s.fov = Math.max(70, Math.min(120, s.fov));

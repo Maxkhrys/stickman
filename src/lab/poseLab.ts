@@ -26,6 +26,7 @@ const floor = new THREE.Mesh(new THREE.PlaneGeometry(60, 60).rotateX(-Math.PI / 
 scene.add(floor);
 const A = await loadRobotAssets('/');
 const rr = new RobotRenderer(null as unknown as Effects, A);
+rr.playerChar = (qs.get('char') ?? 'armored') as 'armored' | 'robot';
 scene.add(rr.group);
 const world = new World({ ...MAPS.range, boxes: [], ramps: [] });
 

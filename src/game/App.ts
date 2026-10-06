@@ -72,6 +72,12 @@ export class App {
       saveSettings(this.settings);
     };
     this.input.onSwapShoulder = () => { this.settings.shoulder = this.settings.shoulder === 1 ? -1 : 1; saveSettings(this.settings); };
+    this.input.onReset = () => {
+      if (this.state === 'playing' && this.adapter.info().mode === 'range') {
+        this.adapter.resetPractice();
+        this.hud.setNote('Practice reset', 1.2);
+      }
+    };
     this.input.onPauseRequest = () => {
       if (this.state === 'playing') this.pause();
     };
@@ -102,6 +108,7 @@ export class App {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2) * s.renderScale * 0.75);
     this.hud.setCrosshairColor(s.crosshairColor);
     this.renderer.hitboxes.enabled = s.showHitboxes && this.state !== 'menu' && this.adapter.info().mode === 'range';
+    this.renderer.setCharacter(s.character);
   }
 
   /** Attract mode: bots fight in the arena behind the main menu. */
@@ -223,11 +230,12 @@ export class App {
         if (e.id === local) {
           // one event drives flash, kick, sound and tracer - same tick as damage and ammo
           this.sfx.shot(e.weapon, 0);
-          R.viewmodel.fire(e.weapon, R.zoom.adsE);
+          if (!R.useRobot) R.viewmodel.fire(e.weapon, R.zoom.adsE);
           R.punch(e.weapon === 'sniper' ? 0.08 : e.weapon === 'pistol' ? 0.04 : 0.02);
-          if (R.thirdPersonActive) {
-            tv.set(e.from.x, e.from.y, e.from.z);
-            R.effects.worldFlash(tv, e.weapon === 'sniper' ? 0.8 : 0.5);
+          if (R.useRobot || R.thirdPersonActive) {
+            // flash + tracer start at the drawn muzzle (the same socket the sim traced from)
+            if (!R.robots?.muzzleOf(e.id, tv)) tv.set(e.from.x, e.from.y, e.from.z);
+            if (R.zoom.scopeCover < 0.5) R.effects.worldFlash(tv, e.weapon === 'sniper' ? 0.8 : 0.5);
           } else R.localMuzzleWorld(tv);
           // latency: first shot after a fresh press (auto-fire continuation isn't a new click)
           const press = this.input.lastFirePress;
@@ -242,7 +250,7 @@ export class App {
         } else {
           const [d, pan] = this.spatial(src.pos);
           this.sfx.shot(e.weapon, d, pan);
-          tv.set(e.from.x, e.from.y, e.from.z);
+          if (!(R.useRobot && R.robots?.muzzleOf(e.id, tv))) tv.set(e.from.x, e.from.y, e.from.z);
           R.effects.worldFlash(tv, e.weapon === 'sniper' ? 0.8 : 0.5);
           R.effects.tracer(tv, tv2, e.weapon === 'sniper' ? 0.04 : 0.03, 0x8b5cf6, 0, 260, e.weapon === 'sniper' ? 6 : 3.5);
         }
@@ -468,6 +476,10 @@ export class App {
       objective: info.objective,
       deathLook: me && !me.alive ? this.fighter(this.lastKillerId)?.pos ?? null : null,
     });
+    // camera rig feedback: keep the aimed point fixed through rig moves, and aim shots from the camera
+    this.input.yaw += this.renderer.aimFix.yaw;
+    this.input.pitch += this.renderer.aimFix.pitch;
+    Object.assign(this.input.aimOffset, this.renderer.aimOffset);
     if (this.awaitFrame > 0) {
       // the frame that shows the muzzle flash has just been submitted
       this.latency.frame.push(performance.now() - this.awaitFrame);
@@ -488,7 +500,7 @@ export class App {
     if (this.renderer.thirdPersonActive) {
       const aim = aimAngles(me, info.time);
       // A copy reflects immediate mouse input without mutating authoritative state.
-      const sight = { ...me, yaw: this.input.yaw, pitch: this.input.pitch };
+      const sight = { ...me, yaw: this.input.yaw, pitch: this.input.pitch, aimOX: this.input.aimOffset.x, aimOY: this.input.aimOffset.y, aimOZ: this.input.aimOffset.z };
       const dir = forwardFromAngles(this.input.yaw + aim.yaw - me.yaw, this.input.pitch + aim.pitch - me.pitch);
       const trace = traceFireLine({ world: this.adapter.world(), fighters: this.adapter.fighters() }, sight, dir);
       const point = trace.tr.point;

@@ -114,6 +114,7 @@ export function updateWeapon(ctx: SimContext, f: Fighter, cmd: InputCommand, dt:
   const cycling = boltCycling(f, def);
   const canAds = def.kind === 'hitscan' && !drawing && !reloading && !cycling;
   const wantAds = canAds && (held & BTN.ADS) !== 0;
+  if (wantAds && f.ads <= 0) f.adsStartTime = ctx.time;
   f.ads = approach(f.ads, wantAds ? 1 : 0, wantAds ? dt / def.adsTime : dt / (def.adsTime * 0.75));
 
   // ---------------- recoil / bloom recovery ----------------

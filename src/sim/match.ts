@@ -21,7 +21,9 @@ export interface MatchOptions {
   scoreLimit: number;
   /** player's primary for matches (range always carries everything) */
   primary?: PrimaryId;
-  mapId?: 'arena' | 'bookyard';
+  mapId?: 'foundry' | 'arena' | 'bookyard';
+  /** practice mode: roaming bots that never shoot (moving targets) */
+  trainingBots?: number;
   playerColor?: number;
   seed?: number;
 }
@@ -77,7 +79,8 @@ export class Match implements SimContext {
   private attackers = new Map<number, number>();
 
   constructor(readonly opts: MatchOptions) {
-    this.map = opts.mode === 'range' ? MAPS.range : MAPS[opts.mapId ?? 'arena'];
+    // practice runs on Foundry's training layout when Foundry is selected, else the classic range
+    this.map = opts.mode === 'range' ? (opts.mapId === 'foundry' ? MAPS.foundry : MAPS.range) : MAPS[opts.mapId ?? 'arena'];
     this.world = new World(this.map);
     this.nav = new NavGraph(this.world, 2);
     this.rng = mulberry32(opts.seed ?? (Math.random() * 1e9) | 0);
@@ -97,6 +100,13 @@ export class Match implements SimContext {
         this.brains.set(b.id, new BotBrain(b, this.diff, this.nav, this.rng));
       }
     } else {
+      // practice movers: full bots (same movement, nav, dashes) that never shoot
+      const movers = Math.max(0, Math.min(4, Math.round(opts.trainingBots ?? 0)));
+      for (let i = 0; i < movers; i++) {
+        const b = createFighter(i + 1, `Runner ${i + 1}`, BOT_COLORS[i % BOT_COLORS.length], 'bot', matchLoadout('ar'));
+        this.fighters.push(b);
+        this.brains.set(b.id, new BotBrain(b, this.diff, this.nav, this.rng, true));
+      }
       this.map.dummies.forEach((d, i) => {
         const f = createFighter(100 + i, `Dummy ${i + 1}`, 0xff8a3d, 'dummy', ['melee']);
         f.dummy = d;
@@ -201,6 +211,8 @@ export class Match implements SimContext {
 
   /** Spawn scoring: far from enemies AND out of their line of sight. */
   private pickSpawn(f: Fighter): { pos: ReturnType<typeof v3>; yaw: number } {
+    const ts = this.map.trainingSpawn;
+    if (ts && this.opts.mode === 'range' && f.kind === 'player') return { pos: v3(ts.pos.x, ts.pos.y, ts.pos.z), yaw: ts.yaw };
     const spawns = this.map.spawns;
     let best = -Infinity;
     let pick = spawns[0];
@@ -249,6 +261,11 @@ export class Match implements SimContext {
     f.crouching = false;
     f.sliding = false;
     f.height = f.prevHeight = MOVE.standHeight;
+    f.airJumpsLeft = MOVE.airJumps;
+    f.airDashesLeft = MOVE.airDashes;
+    f.dashCharges = MOVE.dashCharges;
+    f.dashTimer = 0;
+    f.jumpBuffer = 0;
     f.cur = 0;
     f.switchTimer = WEAPONS[f.weapons[0].id].drawTime;
     f.reloadTimer = 0;
@@ -272,6 +289,17 @@ export class Match implements SimContext {
     this.attackers.delete(f.id);
     this.brains.get(f.id)?.reset();
     this.events.push({ type: 'spawn', id: f.id });
+  }
+
+  /** Practice fast reset: everyone back to their start, full health, ammo and dash charges. */
+  resetPractice() {
+    if (this.opts.mode !== 'range') return;
+    for (const f of this.fighters) {
+      f.dummyT = 0;
+      f.stats = { objective: 0, kills: 0, deaths: 0, shots: 0, hits: 0, headshots: 0, damage: 0, streak: 0, bestStreak: 0 };
+      this.respawn(f, true);
+    }
+    this.events.push({ type: 'reset' });
   }
 
   private dummyCommand(f: Fighter, dt: number): InputCommand {
@@ -320,6 +348,9 @@ export class Match implements SimContext {
       else if (f.kind === 'bot') cmd = this.brains.get(f.id)!.think(this, dt);
       else cmd = this.dummyCommand(f, dt);
 
+      f.aimOX = cmd.ox;
+      f.aimOY = cmd.oy;
+      f.aimOZ = cmd.oz;
       simulateMovement(f, cmd, dt, this.world, this.events, this.time);
       updateWeapon(this, f, cmd, dt, wopts);
       f.prevButtons = cmd.buttons;

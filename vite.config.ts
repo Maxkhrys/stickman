@@ -4,7 +4,7 @@ export default defineConfig({
   base: './',
   build: {
     outDir: 'dist',
-    target: 'es2020',
+    target: 'es2022',
     chunkSizeWarningLimit: 1200,
   },
 });

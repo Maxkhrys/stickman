@@ -1,9 +1,12 @@
 import { v3, yawTo, type Vec3 } from './vec';
+import { buildFoundry } from './maps/foundry';
 
 export interface Box {
   min: Vec3;
   max: Vec3;
   color: number;
+  /** render material key (industrial maps); absent = flat doodle colour */
+  mat?: string;
 }
 
 /** Solid wedge. Height goes linearly from h0 at the low coordinate (x0 / z0) to h1 at x1 / z1. */
@@ -46,6 +49,10 @@ export interface MapDef {
   props: Prop[];
   capturePoints?: Vec3[];
   labels?: { pos: Vec3; text: string }[];
+  /** practice-mode start (defaults to spawns[0]) */
+  trainingSpawn?: SpawnPoint;
+  /** render style: 'doodle' paper maps or 'industrial' material maps */
+  style?: 'doodle' | 'industrial';
 }
 
 // ---- palette (Krunker-ish bright flats) ----
@@ -311,6 +318,7 @@ function buildBookyard(): MapDef {
 }
 
 export const MAPS = {
+  foundry: buildFoundry(),
   arena: { ...buildArena(), capturePoints: [v3(0, 2.4, 0), v3(-18, 0, -20), v3(18, 0, 20)] },
   bookyard: buildBookyard(),
   range: buildRange(),

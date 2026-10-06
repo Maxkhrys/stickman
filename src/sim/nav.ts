@@ -5,7 +5,13 @@ export interface NavEdge {
   to: number;
   cost: number;
   jump: boolean;
+  /** needs the air jump (rise above single-jump reach) */
+  double: boolean;
 }
+
+/** highest rise a single jump clears (measured: 1.5 m) and a double jump clears (2.8 m), with margin */
+const SINGLE_RISE = 1.3;
+const DOUBLE_RISE = 2.65;
 
 export interface NavNode {
   id: number;
@@ -69,10 +75,11 @@ export class NavGraph {
           for (const m of arr) {
             const o = this.nodes[m];
             const dy = o.y - n.y;
-            if (dy > 1.25) continue;
+            if (dy > DOUBLE_RISE) continue;
             if (!this.walkable(n, o)) continue;
             const d = Math.hypot(o.x - n.x, dy, o.z - n.z);
-            n.edges.push({ to: m, cost: d + (dy > 0.55 ? 1.5 : 0), jump: dy > 0.55 });
+            const double = dy > SINGLE_RISE;
+            n.edges.push({ to: m, cost: d + (double ? 4 : dy > 0.55 ? 1.5 : 0), jump: dy > 0.55, double });
           }
         }
       }
@@ -196,6 +203,13 @@ export class NavGraph {
     for (let c = to; c !== from && c >= 0; c = came[c]) path.push(c);
     path.reverse();
     return path;
+  }
+
+  edgeKind(a: number, b: number): 'walk' | 'jump' | 'double' {
+    const n = this.nodes[a];
+    if (!n) return 'walk';
+    for (const e of n.edges) if (e.to === b) return e.double ? 'double' : e.jump ? 'jump' : 'walk';
+    return 'walk';
   }
 
   edgeIsJump(a: number, b: number): boolean {

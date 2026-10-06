@@ -46,6 +46,17 @@ export function traceShot(ctx: { world: SimContext['world']; fighters: readonly 
   return { t: bestT, point: vaddScaled(o, d, bestT), normal, fighter: hitF, part };
 }
 
+/** Shooter state at the moment of the shot, carried on hit/kill events for feedback. */
+export interface ShotInfo {
+  airborne: boolean;
+  quickscope: boolean;
+  distance: number;
+}
+const NO_SHOT: ShotInfo = { airborne: false, quickscope: false, distance: 0 };
+
+/** Quickscope window: a scoped shot fired this soon after starting to aim. */
+export const QUICKSCOPE_WINDOW = 0.6;
+
 export function applyDamage(
   ctx: SimContext,
   attacker: Fighter,
@@ -56,6 +67,7 @@ export function applyDamage(
   dir: Vec3,
   weapon: WeaponId,
   backstab = false,
+  shot: ShotInfo = NO_SHOT,
 ) {
   if (!victim.alive) return;
   dmg = Math.round(dmg);
@@ -80,6 +92,7 @@ export function applyDamage(
     backstab,
     weapon,
     blocked,
+    ...shot,
   });
   ctx.onDamaged(victim, attacker);
   if (killed) {
@@ -103,6 +116,7 @@ export function applyDamage(
       backstab,
       part,
       dir: vclone(dir),
+      ...shot,
     });
     ctx.onKilled(victim, attacker);
   }
@@ -114,9 +128,19 @@ export function adsAccuracy(f: Fighter, def: WeaponDef = WEAPONS[f.weapons[f.cur
   return a * a * (3 - 2 * a);
 }
 
+/** Scoped precision is binary past the readiness threshold: weapons with `adsReady` are exact once ready. */
+export function adsReady(f: Fighter, def: WeaponDef = WEAPONS[f.weapons[f.cur].id]): boolean {
+  return def.adsReady !== undefined && f.ads >= def.adsReady;
+}
+
 export function computeSpread(f: Fighter): number {
   const def = WEAPONS[f.weapons[f.cur].id];
   if (def.kind === 'melee') return 0;
+  if (def.adsReady !== undefined) {
+    if (adsReady(f, def)) return 0;
+    const hs = Math.hypot(f.vel.x, f.vel.z);
+    return def.spreadHip + def.spreadMove * clamp(hs / MOVE.maxSpeed, 0, 1.4) + (f.onGround ? 0 : def.spreadAir);
+  }
   const acc = adsAccuracy(f, def);
   const hs = Math.hypot(f.vel.x, f.vel.z);
   let base = (def.spreadHip + f.bloom) * lerp(1, def.adsSpreadMult, acc);
@@ -140,42 +164,74 @@ function offsetDir(yaw: number, pitch: number, dx: number, dy: number): Vec3 {
   return vnorm(v3(fw.x + rt.x * tx + up.x * ty, fw.y + rt.y * tx + up.y * ty, fw.z + rt.z * tx + up.z * ty));
 }
 
-/** Nearby-cover check: distance along which the barrel (not just the eye) must be clear. */
-const OBSTRUCTION_RANGE = 1.8;
+/** Furthest the aim origin (camera) may sit from the eye; anything beyond is treated as the eye. */
+export const MAX_AIM_OFFSET = 4.5;
+
+/** Camera position used as the aim origin: eye + the command's offset, clamped and LOS-checked. */
+export function aimOrigin(ctx: { world: SimContext['world'] }, f: Fighter): Vec3 {
+  const eye = eyePos(f);
+  const ox = f.aimOX, oy = f.aimOY, oz = f.aimOZ;
+  const len = Math.hypot(ox, oy, oz);
+  if (len < 1e-4 || len > MAX_AIM_OFFSET) return eye;
+  const o = v3(eye.x + ox, eye.y + oy, eye.z + oz);
+  // the camera must be somewhere the fighter could actually look from (no aiming from inside walls)
+  if (!ctx.world.los(eye, o)) return eye;
+  return o;
+}
+
+export interface ShotResolve {
+  /** intended point: first world surface or fighter on the camera ray through the reticle */
+  aim: Vec3;
+  /** what the bullet actually hits, traced from the muzzle toward `aim` */
+  tr: TraceResult;
+  muzzle: Vec3;
+  /** something between the muzzle and the intended point stopped the shot */
+  obstructed: boolean;
+}
 
 /**
- * One shot. Everything (ammo is handled by the caller) - damage, recoil, and the single 'shot' event that
- * drives muzzle flash, tracer, sound and impact - happens here in the same tick.
+ * Two-stage shot: (1) the intended point is where the camera ray through the reticle first meets the
+ * world or a fighter (excluding the shooter and anything behind the shooter's eye plane); (2) the bullet
+ * travels from the actual muzzle toward that point and stops at any nearer obstruction. A camera that
+ * can see past a corner therefore never lets the barrel shoot through the wall in front of it.
  */
-export function traceFireLine(ctx: { world: SimContext['world']; fighters: readonly Fighter[] }, f: Fighter, dir: Vec3) {
-  const eye = eyePos(f);
+export function resolveShot(ctx: { world: SimContext['world']; fighters: readonly Fighter[] }, f: Fighter, dir: Vec3): ShotResolve {
   const def = WEAPONS[f.weapons[f.cur].id];
-  let tr = traceShot(ctx, f, eye, dir, def.range);
-  // Barrel obstruction: the camera may see over a ledge the gun is still behind.
+  const eye = eyePos(f);
+  const o = aimOrigin(ctx, f);
+  // start the camera ray level with the eye so nothing between camera and shooter is targeted
+  const t0 = Math.max(0, (eye.x - o.x) * dir.x + (eye.y - o.y) * dir.y + (eye.z - o.z) * dir.z);
+  const start = vaddScaled(o, dir, t0);
+  const cam = traceShot(ctx, f, start, dir, def.range);
+  const aim = cam.point;
   const muzzle = muzzlePos(f);
-  let obstructed = false;
+
+  // barrel inside geometry the eye can see past (hugging a wall)
   const em = vsub(muzzle, eye);
   const emLen = Math.hypot(em.x, em.y, em.z);
-  const gunInWall = ctx.world.raycast(eye, vnorm(em), emLen);
-  if (gunInWall) {
-    obstructed = true;
-    tr = { t: gunInWall.t, point: vaddScaled(eye, vnorm(em), gunInWall.t), normal: gunInWall.normal, fighter: null, part: null };
-  } else {
-    const near = Math.min(tr.t, OBSTRUCTION_RANGE);
-    const target = vaddScaled(eye, dir, near);
-    const mt = vsub(target, muzzle);
-    const mtLen = Math.hypot(mt.x, mt.y, mt.z);
-    if (mtLen > 0.05) {
-      const md = vnorm(mt);
-      const block = ctx.world.raycast(muzzle, md, mtLen - 0.02);
-      if (block) {
-        obstructed = true;
-        tr = { t: block.t, point: vaddScaled(muzzle, md, block.t), normal: block.normal, fighter: null, part: null };
-      }
-    }
+  const emDir = vnorm(em);
+  const inWall = emLen > 1e-3 ? ctx.world.raycast(eye, emDir, emLen) : null;
+  if (inWall) {
+    const p = vaddScaled(eye, emDir, inWall.t);
+    return { aim, muzzle, obstructed: true, tr: { t: 0, point: p, normal: inWall.normal, fighter: null, part: null } };
   }
+  const mt = vsub(aim, muzzle);
+  const mtLen = Math.hypot(mt.x, mt.y, mt.z);
+  const md = mtLen > 0.25 ? vnorm(mt) : dir;
+  const tr = traceShot(ctx, f, muzzle, md, mtLen > 0.25 ? Math.min(def.range, mtLen + 0.06) : def.range);
+  // obstructed: stopped clearly short of the intended point by something other than the intended target
+  const obstructed = tr.t < mtLen - 0.08 && !(cam.fighter && tr.fighter === cam.fighter);
+  if (!tr.fighter && !tr.normal && !cam.normal && !cam.fighter) {
+    // open sky: report the far point along the muzzle line
+    tr.point = vaddScaled(muzzle, md, def.range);
+    tr.t = def.range;
+  }
+  return { aim, tr, muzzle, obstructed };
+}
 
-  return { tr, muzzle, obstructed };
+/** Back-compat helper (HUD): same result shape as before. */
+export function traceFireLine(ctx: { world: SimContext['world']; fighters: readonly Fighter[] }, f: Fighter, dir: Vec3) {
+  return resolveShot(ctx, f, dir);
 }
 
 export function fireHitscan(ctx: SimContext, f: Fighter, def: WeaponDef) {
@@ -184,7 +240,12 @@ export function fireHitscan(ctx: SimContext, f: Fighter, def: WeaponDef) {
   const r = Math.sqrt(ctx.rng()) * spread;
   const aim = aimAngles(f, ctx.time);
   const dir = offsetDir(aim.yaw, aim.pitch, Math.cos(a) * r, Math.sin(a) * r);
-  const { tr, muzzle, obstructed } = traceFireLine(ctx, f, dir);
+  const { tr, muzzle, obstructed } = resolveShot(ctx, f, dir);
+  const shot: ShotInfo = {
+    airborne: !f.onGround,
+    quickscope: !!def.scope && adsReady(f, def) && ctx.time - f.adsStartTime <= QUICKSCOPE_WINDOW,
+    distance: Math.hypot(tr.point.x - muzzle.x, tr.point.y - muzzle.y, tr.point.z - muzzle.z),
+  };
   f.stats.shots++;
   if (f.spawnProtect > 0) {
     f.spawnProtect = 0;
@@ -205,13 +266,14 @@ export function fireHitscan(ctx: SimContext, f: Fighter, def: WeaponDef) {
 
   if (tr.fighter && tr.part) {
     let dmg = def.damage[tr.part];
-    if (tr.t > def.falloffStart) {
-      const k = clamp((tr.t - def.falloffStart) / (def.falloffEnd - def.falloffStart), 0, 1);
+    if (shot.distance > def.falloffStart) {
+      const k = clamp((shot.distance - def.falloffStart) / (def.falloffEnd - def.falloffStart), 0, 1);
       dmg *= lerp(1, def.falloffMin, k);
     }
     f.stats.hits++;
     if (tr.part === 'head') f.stats.headshots++;
-    applyDamage(ctx, f, tr.fighter, dmg, tr.part, tr.point, dir, def.id);
+    const hitDir = vnorm(vsub(tr.point, muzzle));
+    applyDamage(ctx, f, tr.fighter, dmg, tr.part, tr.point, hitDir, def.id, false, shot);
   }
 
   // ---- gameplay recoil: sharp impulse + sustained learnable climb ----

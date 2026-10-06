@@ -11,7 +11,7 @@ const el = (tag: string, cls = '', html = '') => {
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 const hex = (c: number) => '#' + c.toString(16).padStart(6, '0');
-export const WNAME: Record<string, string> = { ar: 'Inkblaster', sniper: 'Graphite', pistol: 'Highlighter', melee: 'Pencil', smg: 'Scribbler', carbine: 'Finepoint' };
+export const WNAME: Record<string, string> = { ar: 'Vanguard AR', sniper: 'Longshot', pistol: 'Sidearm', melee: 'Pencil', smg: 'Compact', carbine: 'Finepoint' };
 
 export type HitKind = 'body' | 'head' | 'kill' | 'blocked';
 

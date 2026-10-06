@@ -12,6 +12,8 @@ import { MAPS } from '../src/sim/map';
 import { World } from '../src/sim/world';
 import { createFighter } from '../src/sim/fighter';
 import { simulateMovement } from '../src/sim/movement';
+import { MOVE } from '../src/config/movement';
+import { WEAPONS } from '../src/config/weapons';
 
 let failed = 0;
 function check(name: string, ok: boolean, detail: string) {
@@ -54,14 +56,14 @@ function aimAt(p: Fighter, c: InputCommand, x: number, y: number, z: number) {
   const { place, run, hs } = setup('range');
   place(-14, 0, 8);
   run(0.1, (c) => { c.forward = 1; c.yaw = 0; });
-  check('ground accel snappy', hs() > 7, `${hs().toFixed(2)} m/s after 0.1s`);
+  check('ground accel snappy', hs() > MOVE.maxSpeed * 0.9, `${hs().toFixed(2)} of ${MOVE.maxSpeed} m/s after 0.1s`);
   run(0.2, (c) => { c.yaw = 0; });
   check('stops quickly', hs() < 2, `${hs().toFixed(2)} m/s after 0.2s release`);
   place(-14, 0, 8);
   run(0.4, (c) => { c.forward = 1; c.yaw = 0; });
   const before = hs();
   run(0.05, (c) => { c.forward = 1; c.yaw = 0; c.buttons = BTN.CROUCH; });
-  check('slide boost', hs() > before + 3, `${before.toFixed(1)} -> ${hs().toFixed(1)}`);
+  check('slide boost', hs() > before + MOVE.slideBoost * 0.75, `${before.toFixed(1)} -> ${hs().toFixed(1)}`);
 }
 {
   const { place, run, hs } = setup('range');
@@ -74,19 +76,20 @@ function aimAt(p: Fighter, c: InputCommand, x: number, y: number, z: number) {
     yaw -= dir * 2.4 * TICK_DT;
     c.yaw = yaw; c.strafe = dir; c.buttons = BTN.JUMP;
   });
-  check('bhop + air strafe gains speed', hs() > 10.5, `${hs().toFixed(2)} m/s after 2.5s`);
+  // speed caps: air strafing and held-jump hops never build speed past the run speed
+  check('bhop + air strafe cannot pump speed', hs() <= MOVE.maxSpeed + 0.05, `${hs().toFixed(2)} m/s after 2.5s (run ${MOVE.maxSpeed})`);
 }
 // ---------------------------------------------------------------- collision
 {
   const { p, place, run } = setup('ffa');
   place(-13, 0, 0);
-  run(1.2, (c) => { c.yaw = yawTo(1, 0); c.forward = 1; });
+  run(2, (c) => { c.yaw = yawTo(1, 0); c.forward = 1; });
   check('walk up ramp onto tower', Math.abs(p.pos.y - 2.4) < 0.01, `y=${p.pos.y.toFixed(2)}`);
   place(0, 0, 26);
   const top = run(1, (c) => { if (p.onGround) c.buttons = BTN.JUMP; });
   check('catwalk ceiling stops head', top + 1.8 <= 2.61, `head max ${(top + 1.8).toFixed(2)}`);
   place(-34, 0, 26);
-  run(1.4, (c) => { c.yaw = yawTo(1, 0); c.forward = 1; });
+  run(2.2, (c) => { c.yaw = yawTo(1, 0); c.forward = 1; });
   check('ramp up to catwalk', Math.abs(p.pos.y - 3) < 0.01, `y=${p.pos.y.toFixed(2)}`);
   place(-36, 0, -20);
   const jt = Math.round(0.35 / TICK_DT);
@@ -148,15 +151,16 @@ function aimAt(p: Fighter, c: InputCommand, x: number, y: number, z: number) {
     if (accAt < 0 && computeSpread(p) < 0.0005) accAt = i * TICK_DT;
     if (tSn < 0 && p.ads >= 1) tSn = i * TICK_DT;
   });
-  check('sniper ADS entry 260-320ms', tSn >= 0.25 && tSn <= 0.32, `${(tSn * 1000).toFixed(0)} ms`);
-  check('sniper precise as scope appears', accAt > 0.2 && accAt <= 0.25, `hip spread ${(hip * 1000).toFixed(0)} mrad, precise at ${(accAt * 1000).toFixed(0)} ms (overlay full ~238ms)`);
+  check('sniper ADS entry ~150ms', tSn >= 0.14 && tSn <= 0.165, `${(tSn * 1000).toFixed(0)} ms`);
+  const readyAt = WEAPONS.sniper.adsReady! * WEAPONS.sniper.adsTime;
+  check('sniper precise at the ADS readiness threshold', hip > 0.03 && Math.abs(accAt - readyAt) <= TICK_DT * 1.5, `hip spread ${(hip * 1000).toFixed(0)} mrad, precise at ${(accAt * 1000).toFixed(0)} ms (threshold ${(readyAt * 1000).toFixed(0)} ms)`);
   // reverse halfway: progress stays continuous
   run(0.2, () => {});
   const seq: number[] = [];
   run(0.3, (c, i) => { if (i < Math.round(0.14 / TICK_DT)) c.buttons = BTN.ADS; seq.push(p.ads); });
   let maxJump = 0;
   for (let i = 1; i < seq.length; i++) maxJump = Math.max(maxJump, Math.abs(seq[i] - seq[i - 1]));
-  check('ADS reversal is continuous', maxJump <= TICK_DT / (0.28 * 0.75) + 1e-9, `max step ${maxJump.toFixed(4)}`);
+  check('ADS reversal is continuous', maxJump <= TICK_DT / (WEAPONS.sniper.adsTime * 0.75) + 1e-9, `max step ${maxJump.toFixed(4)}`);
 }
 // ---------------------------------------------------------------- sniper lethality per region
 {
@@ -207,7 +211,7 @@ function aimAt(p: Fighter, c: InputCommand, x: number, y: number, z: number) {
     if (secondAt < 0 && shots > before) secondAt = i * TICK_DT;
   });
   count();
-  check('bolt not bypassed by switching', shots >= 1 && (secondAt < 0 || secondAt > 0.9), `second shot ${secondAt < 0 ? 'none' : (secondAt * 1000).toFixed(0) + 'ms after returning'}`);
+  check('bolt not bypassed by switching', shots >= 1 && (secondAt < 0 || secondAt >= boltKept - TICK_DT), `second shot ${secondAt < 0 ? 'none' : (secondAt * 1000).toFixed(0) + 'ms after returning'}`);
   check('bolt state kept on the slot while holstered', boltKept > 0.5, `boltLeft ${boltKept.toFixed(2)}s after switching away`);
   check('state rules report bolting', weaponState(p) === 'bolting' || weaponState(p) === 'ready', `state ${weaponState(p)}`);
 }

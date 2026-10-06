@@ -1,4 +1,4 @@
-import { MODEL_FOR, WEAPON_MODELS, adsBlend, type V3, type WeaponModel } from '../config/weaponModels';
+import { ADS_CAMERA_FORWARD, MODEL_FOR, WEAPON_MODELS, adsBlend, type V3, type WeaponModel } from '../config/weaponModels';
 import type { WeaponId } from './types';
 import { v3, type Vec3 } from './vec';
 
@@ -32,7 +32,7 @@ export function weaponFrame(eye: Vec3, yaw: number, pitch: number, weapon: Weapo
   w.model = m;
   aimBasis(yaw, pitch, w.r, w.u, w.f);
   const a = adsBlend(ads);
-  const hr = m.hip[0] * (1 - a), hu = m.hip[1] * (1 - a), hf = m.hip[2] + (m.adsForward - m.hip[2]) * a;
+  const hr = m.hip[0] * (1 - a), hu = m.hip[1] * (1 - a), hf = m.hip[2] + (ADS_CAMERA_FORWARD + m.adsForward - m.hip[2]) * a;
   w.o.x = eye.x + w.r.x * hr + w.u.x * hu + w.f.x * hf;
   w.o.y = eye.y + w.r.y * hr + w.u.y * hu + w.f.y * hf;
   w.o.z = eye.z + w.r.z * hr + w.u.z * hu + w.f.z * hf;

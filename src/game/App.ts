@@ -156,7 +156,9 @@ export class App {
     this.rangeDps = [];
     this.applySettings();
     if (s.mode === 'range') {
-      this.hud.setNote('✎ <b>Practice range</b>: <kbd>1-4</kbd> / wheel swap all 6 weapons · <kbd>H</kbd> show hit regions · <kbd>RMB</kbd> aim / scope. Movement course on the right.', 8);
+      this.hud.setNote(this.adapter.map().name === 'Foundry'
+        ? '<b>Foundry practice</b>: targets down the north lane at 15-100 m, on containers, the catwalk and the smelter. <kbd>T</kbd> reset · <kbd>1-4</kbd> weapons · <kbd>H</kbd> hit regions · <kbd>Shift</kbd> dash · <kbd>Space</kbd> twice to double jump.'
+        : '<b>Practice range</b>: <kbd>1-4</kbd> / wheel swap all 6 weapons · <kbd>H</kbd> show hit regions · <kbd>RMB</kbd> aim / scope. Movement course on the right.', 8);
     } else if (s.mode === 'sketch') {
       this.hud.setNote('Hold the marked zone alone to score. First to 60. Zone moves every 40 seconds. V camera · Q shoulder.', 8);
     } else {

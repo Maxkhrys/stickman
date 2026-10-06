@@ -12,7 +12,7 @@ import { Effects } from './Effects';
 import { HitboxDebug } from './HitboxDebug';
 import { buildMapMesh } from './mapMesh';
 import { Viewmodel, adsEase } from './Viewmodel';
-import { adsBlend } from '../config/weaponModels';
+import { ADS_CAMERA_FORWARD, adsBlend } from '../config/weaponModels';
 import { RobotRenderer, robotAssets } from './robot/RobotRenderer';
 
 /** Shoulder camera tuning (metres, in the aim frame). See docs/SNIPER_UPGRADE.md. */
@@ -333,7 +333,8 @@ export class GameRenderer {
       // local offset in the aim frame: right, up, back (metres)
       const hipR = tp ? CAM.right * this.shoulderSide : 0, hipU = tp ? CAM.up : 0, hipB = tp ? CAM.back : 0;
       const keep = robot || !def.scope ? 1 - adsC : Math.max(0, 1 - ads * 4); // stickman scopes cut straight to the viewmodel
-      let lr = hipR * keep, lu = hipU * keep, lb = hipB * keep;
+      // robots end inside the sights: ADS_CAMERA_FORWARD ahead of the eye (negative 'back')
+      let lr = hipR * keep, lu = hipU * keep, lb = hipB * keep - (robot ? ADS_CAMERA_FORWARD * adsC : 0);
       let viewYaw = fi.viewYaw, viewPitch = fi.viewPitch;
       const eyeX = px, eyeY = py + this.eyeH + (tp ? 0 : this.stepOff + bobY + this.dip.x * 0.35 * ms), eyeZ = pz;
       const offsetAt = (yawA: number, pitchA: number, r: number, u: number, bk: number, frac: number, out: THREE.Vector3) => {

@@ -111,6 +111,10 @@ export const MODEL_FOR: Record<WeaponId, keyof typeof WEAPON_MODELS | null> = {
   melee: null,
 };
 
+/** At full ADS the camera sits this far ahead of the eye (clear of the character's own shoulders and
+ *  head); every weapon's eye socket is placed `adsForward` beyond that, so the sights still meet the camera. */
+export const ADS_CAMERA_FORWARD = 0.2;
+
 /** ADS blend curve shared by the camera, the weapon pose and the sim muzzle. */
 export function adsBlend(ads: number): number {
   const t = ads < 0 ? 0 : ads > 1 ? 1 : ads;

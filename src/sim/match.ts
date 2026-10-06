@@ -265,6 +265,7 @@ export class Match implements SimContext {
     f.airDashesLeft = MOVE.airDashes;
     f.dashCharges = MOVE.dashCharges;
     f.dashTimer = 0;
+    f.rollTimer = 0;
     f.jumpBuffer = 0;
     f.cur = 0;
     f.switchTimer = WEAPONS[f.weapons[0].id].drawTime;

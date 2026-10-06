@@ -283,6 +283,7 @@ export function simulateMovement(f: Fighter, cmd: InputCommand, dt: number, worl
     f.dashDirX = dx;
     f.dashDirZ = dz;
     f.dashAir = !f.onGround;
+    f.rollTimer = f.dashAir ? 0 : MOVE.rollTime;
     f.lastDashTime = time;
     if (f.dashAir) {
       f.airDashesLeft--;
@@ -290,6 +291,9 @@ export function simulateMovement(f: Fighter, cmd: InputCommand, dt: number, worl
     }
     events.push({ type: 'dash', id: f.id, air: f.dashAir, dx, dz });
   }
+
+  // the dodge roll ends when it runs out, or when you leave the ground / start sliding
+  f.rollTimer = f.onGround && !f.sliding ? Math.max(0, f.rollTimer - dt) : 0;
 
   // ---- steering ----
   let maxSp = f.crouching ? MOVE.crouchSpeed : wl > 0 ? directionalSpeed(cmd.forward, cmd.strafe) : MOVE.maxSpeed;

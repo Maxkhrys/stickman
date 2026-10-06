@@ -387,6 +387,15 @@ export class App {
       case 'jump':
         if (e.id === local) this.sfx.jump();
         break;
+      case 'dash': {
+        const f = this.fighter(e.id);
+        if (e.id === local) { this.sfx.dash(e.air); R.dashFx(e.air); }
+        else if (f) { const [d, pan] = this.spatial(f.pos); this.sfx.dash(e.air, d, pan); }
+        break;
+      }
+      case 'airJump':
+        if (e.id === local) { this.sfx.airJump(); R.punch(0.5); }
+        break;
       case 'land':
         if (e.id === local) {
           R.land(e.speed);

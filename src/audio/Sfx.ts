@@ -324,6 +324,23 @@ export class Sfx {
     this.tone(o, this.t, 0.1, 'sine', 80, 40, 0.6);
   }
 
+  /** Dash / dodge roll whoosh (spatial for other fighters); a ground roll adds the thump of the tuck. */
+  dash(air: boolean, dist = 0, pan = 0) {
+    if (!this.ok()) return;
+    const g = dist === 0 ? 0.32 : Math.max(0, 0.3 * (1 - dist / 30));
+    if (g <= 0.01) return;
+    const o = this.out('weapons', g, pan);
+    this.noiseBurst(o, this.t, 0.26, 'bandpass', 500, 2600, 1.1, 0.7, 0.02);
+    if (!air) this.tone(o, this.t + 0.01, 0.12, 'sine', 110, 55, 0.5);
+  }
+
+  airJump() {
+    if (!this.ok()) return;
+    const o = this.out('weapons', 0.2);
+    this.noiseBurst(o, this.t, 0.14, 'bandpass', 700, 2200, 1.2, 0.6, 0.01);
+    this.tone(o, this.t, 0.1, 'sine', 300, 520, 0.18);
+  }
+
   slide() {
     if (!this.ok()) return;
     const o = this.out('weapons', 0.25);

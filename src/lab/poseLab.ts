@@ -30,10 +30,52 @@ rr.playerChar = (qs.get('char') ?? 'armored') as 'armored' | 'robot';
 scene.add(rr.group);
 const world = new World({ ...MAPS.range, boxes: [], ramps: [] });
 
-type Setup = Partial<Fighter> & { w: WeaponId; vx?: number; vz?: number };
+type Setup = Partial<Fighter> & {
+  w: WeaponId; vx?: number; vz?: number;
+  /** melee swing that began this many seconds before the end of the run */
+  swing?: { heavy?: boolean; ago: number };
+  /** dodge roll progress 0..1 */
+  roll?: number;
+  /** hit reaction from this bullet direction, that many seconds before the end */
+  hit?: { dx: number; dz: number; ago: number };
+  /** killed this many seconds before the end */
+  deadAgo?: number;
+};
+const row = (n: number, f: (i: number) => Setup): Setup[] => Array.from({ length: n }, (_, i) => f(i));
 const weaponQ = qs.get('weapon') as WeaponId | null;
 const adsQ = Number(qs.get('ads') ?? 0);
-const setups: Setup[] = qs.get('set') === 'moves'
+const setups: Setup[] = qs.get('set') === 'melee'
+  ? [
+      { w: 'melee' },
+      ...[0.05, 0.1, 0.16, 0.24].map((ago) => ({ w: 'melee' as WeaponId, swing: { ago } })),
+      ...[0.1, 0.22, 0.34, 0.48, 0.62].map((ago) => ({ w: 'melee' as WeaponId, swing: { heavy: true, ago } })),
+    ]
+  : qs.get('set') === 'roll'
+  ? row(7, (i) => ({ w: weaponQ ?? 'ar', roll: (i + 0.5) / 7, vz: -9 }))
+  : qs.get('set') === 'react'
+  ? [
+      { w: 'ar', hit: { dx: 0, dz: 1, ago: 0.08 } },
+      { w: 'ar', hit: { dx: 0, dz: 1, ago: 0.2 } },
+      { w: 'ar', hit: { dx: 1, dz: 0, ago: 0.12 } },
+      { w: 'ar', hit: { dx: 1, dz: 0, ago: 0.24 } },
+      { w: 'ar', hit: { dx: 0, dz: -1, ago: 0.12 } },
+      { w: 'ar', hit: { dx: 0, dz: -1, ago: 0.26 } },
+      { w: 'ar', deadAgo: 0.4 },
+      { w: 'ar', deadAgo: 0.9 },
+      { w: 'ar', deadAgo: 1.5 },
+      { w: 'ar', deadAgo: 2.2 },
+    ]
+  : qs.get('set') === 'stance'
+  ? [
+      { w: 'ar' },
+      { w: 'ar', crouching: true, height: MOVE.crouchHeight },
+      { w: 'ar', crouching: true, height: MOVE.crouchHeight, vz: -3 },
+      { w: 'sniper', crouching: true, height: MOVE.crouchHeight },
+      { w: 'ar', vz: -1.5 },
+      { w: 'ar', vz: -6.4 },
+      { w: 'ar', sliding: true, height: MOVE.crouchHeight, vz: -10 },
+    ]
+  : qs.get('set') === 'moves'
   ? [
       { w: weaponQ ?? 'sniper', vz: -6.4 },
       { w: weaponQ ?? 'sniper', vx: 6 },
@@ -70,9 +112,15 @@ const fighters: Fighter[] = setups.map((s, i) => {
   f.switchTimer = 0;
   return f;
 });
+setups.forEach((s, i) => {
+  const f = fighters[i];
+  if (s.roll !== undefined) { f.dashDirX = 0; f.dashDirZ = -1; f.rollTimer = MOVE.rollTime * (1 - s.roll); f.dashAir = false; }
+  if (s.deadAgo !== undefined) f.alive = true;
+});
 const cam = new THREE.PerspectiveCamera(view === 'fp' ? 60 : 32, W / H, 0.03, 200);
 const span = setups.length * 1.9;
-if (view === 'side') { cam.position.set(0, 1.3, span * 1.3); }
+const zoom = Number(qs.get('zoom') ?? 1);
+if (view === 'side') { cam.position.set(0, 1.1, (span * 1.3) / zoom); }
 else if (view === 'front') { cam.position.set(0, 1.4, -span * 1.25); }
 else if (view === 'back') { cam.position.set(0, 1.6, span * 1.25); }
 else if (view === 'top') { cam.position.set(0, span * 1.4, 0.01); }
@@ -100,6 +148,25 @@ if (view === 'fp') {
 }
 cam.updateMatrixWorld();
 const t = Number(qs.get('t') ?? 0.4);
-for (let i = 0; i < 20; i++) rr.update(t / 20, fighters, 1, t * (i + 1) / 20, world, cam, { hideHeadOf: view === 'fp' ? idx : -1, localId: -1, viewYaw: 0, viewPitch: 0 });
+const N = 96;
+for (let i = 0; i < N; i++) {
+  const now = (t * (i + 1)) / N;
+  setups.forEach((s, k) => {
+    const f = fighters[k], trigger = (ago: number) => now >= t - ago && now - t / N < t - ago;
+    if (s.swing && trigger(s.swing.ago)) { f.lastMeleeTime = now; f.lastMeleeHeavy = !!s.swing.heavy; }
+    if (s.hit && trigger(s.hit.ago)) { rr.hurt(f.id, s.hit.dx, s.hit.dz); }
+    if (s.deadAgo !== undefined && trigger(s.deadAgo)) f.alive = false;
+  });
+  rr.update(t / N, fighters, 1, now, world, cam, { hideHeadOf: view === 'fp' ? idx : -1, localId: -1, viewYaw: 0, viewPitch: 0 });
+}
+if (qs.get('dump')) {
+  const names = ['Hips', 'Spine', 'Spine1', 'Spine2', 'Neck', 'Head', 'LeftUpLeg', 'LeftFoot'];
+  fighters.forEach((f, k) => {
+    const c = (rr as unknown as { chars: Map<number, { b: Record<string, THREE.Bone>; root: THREE.Object3D }> }).chars.get(f.id)!;
+    c.root.updateMatrixWorld(true);
+    const out = names.map((n) => { const v = c.b[n].getWorldPosition(new THREE.Vector3()); return `${n}:${(v.x - f.pos.x).toFixed(2)},${v.y.toFixed(2)}`; });
+    console.error(`dump #${k}`, out.join(' '));
+  });
+}
 r.render(scene, cam);
 (window as unknown as { done: boolean }).done = true;

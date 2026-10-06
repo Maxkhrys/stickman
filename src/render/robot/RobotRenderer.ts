@@ -11,12 +11,14 @@ import { weaponFrame, type WeaponFrame } from '../../sim/weaponFrame';
 import type { World } from '../../sim/world';
 import type { Effects } from '../Effects';
 import { makeBlobTexture } from '../textures';
+import { buildTpGuns } from '../tpGuns';
 import { loadClipLibrary, PoseAccumulator, type Clip, type ClipLibrary } from './clips';
 
 // ============================================================================
 //  Robot characters. One skinned robot per fighter, animated in layers:
 //    1. lower body: phase-locked directional locomotion (walk / run / sprint x
-//       F / B / L / R), air clips (jump, tuck, reach, fall, land), crouch idle
+//       F / B / L / R), air clips (jump, tuck, reach, fall, land), hard landing, and the
+//       dodge roll / landing roll / death as full-body clip overrides; crouch = upright idle dropped at the hips
 //    2. upper body: rifle aiming idle, then a spine twist + pitch so the chest
 //       follows the aim, head looks along the aim
 //    3. arms: two-bone IK to the weapon's grip and support sockets, hand
@@ -141,6 +143,29 @@ function boneMap(root: THREE.Object3D): Record<string, THREE.Bone> {
   return out;
 }
 
+let pencilGeo: THREE.BufferGeometry | null = null;
+/** The "Pencil" melee weapon: tpGuns' merged pencil, bore turned onto +X (the weapon frame's forward). */
+function pencilGeometry() {
+  if (!pencilGeo) pencilGeo = buildTpGuns().melee.clone().rotateY(-Math.PI / 2);
+  return pencilGeo;
+}
+const PENCIL_SCALE = 2.4;
+const PENCIL_REACH = 0.06;
+let pencilMat: THREE.MeshStandardMaterial | null = null;
+function makePencil(ch: CharAsset, hand: THREE.Bone) {
+  pencilMat ??= new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.05 });
+  const m = new THREE.Mesh(pencilGeometry(), pencilMat);
+  m.castShadow = false;
+  m.frustumCulled = false;
+  // same hand-to-weapon frame the guns use (gripRel), so it sits in the fist like a held weapon
+  const q = ch.gripRel.right.clone().invert();
+  m.quaternion.copy(q);
+  m.scale.setScalar(PENCIL_SCALE / ROBOT_SCALE);
+  m.position.set(PENCIL_REACH, 0, 0).applyQuaternion(q).divideScalar(ROBOT_SCALE);
+  hand.add(m);
+  return m;
+}
+
 /**
  * Hand orientation relative to the gun, measured once from the rifle aiming clip: the gun's forward is
  * the trigger hand -> support hand line, its up is world up. At runtime hand = weaponFrame * rel, so the
@@ -176,6 +201,7 @@ const tv2 = new THREE.Vector3();
 const tv3 = new THREE.Vector3();
 const tq = new THREE.Quaternion();
 const tq2 = new THREE.Quaternion();
+const tq3 = new THREE.Quaternion();
 const tm = new THREE.Matrix4();
 const ts = new THREE.Vector3();
 const v3of = (p: Vec3, out = new THREE.Vector3()) => out.set(p.x, p.y, p.z);
@@ -187,8 +213,10 @@ function setWorldQuat(b: THREE.Object3D, q: THREE.Quaternion) {
 }
 /** Pre-rotate a bone in world space by `r` (parent world matrix must be current). */
 function rotateWorld(b: THREE.Object3D, r: THREE.Quaternion) {
+  // r is routinely the shared scratch `tq` itself: copy it before getWorldQuaternion overwrites it
+  tq3.copy(r);
   b.getWorldQuaternion(tq);
-  setWorldQuat(b, tq.premultiply(r));
+  setWorldQuat(b, tq.premultiply(tq3));
 }
 
 const ia = new THREE.Vector3(), ib = new THREE.Vector3(), ic = new THREE.Vector3(), it = new THREE.Vector3();
@@ -235,6 +263,41 @@ function twoBoneIK(A: THREE.Bone, B: THREE.Bone, C: THREE.Bone, target: THREE.Ve
   B.updateWorldMatrix(false, true);
 }
 
+// ---------------------------------------------------------------------------- first-person melee
+type P3 = [number, number, number];
+interface MeleeKey { p: P3; d: P3 }
+/** pencil hand (right, up, forward of the eye, metres) and where the pencil points, per swing keyframe */
+const MELEE_REST: MeleeKey = { p: [0.27, -0.3, 0.5], d: [0, 0.4, 1] };
+const MELEE_PATHS: Record<string, { keys: MeleeKey[]; at: number[] }> = {
+  // overhead raise, diagonal cut to the left, settle
+  meleeLight: {
+    keys: [MELEE_REST, { p: [0.38, 0.12, 0.4], d: [0.2, 1, 0.5] }, { p: [-0.3, -0.38, 0.66], d: [-0.9, -0.35, 0.7] }, MELEE_REST],
+    at: [0, 0.26, 0.6, 1],
+  },
+  // rising backhand cut from the low left
+  meleeLightB: {
+    keys: [MELEE_REST, { p: [-0.34, -0.36, 0.5], d: [-0.7, -0.5, 0.8] }, { p: [0.4, 0.12, 0.64], d: [0.8, 0.55, 0.7] }, MELEE_REST],
+    at: [0, 0.26, 0.6, 1],
+  },
+  // pull back, then thrust straight ahead
+  meleeHeavy: {
+    keys: [MELEE_REST, { p: [0.3, -0.24, 0.16], d: [0.1, 0.5, 1] }, { p: [0.04, -0.06, 1.0], d: [0, 0.04, 1] }, { p: [0.04, -0.06, 1.0], d: [0, 0.04, 1] }, MELEE_REST],
+    at: [0, 0.48, 0.66, 0.78, 1],
+  },
+};
+function meleePose(kind: string, u: number, p: P3, d: P3) {
+  const path = MELEE_PATHS[kind];
+  let a = MELEE_REST, b = MELEE_REST, k = 0;
+  if (path && u >= 0 && u < 1) {
+    let i = 0;
+    while (i < path.at.length - 2 && u >= path.at[i + 1]) i++;
+    a = path.keys[i];
+    b = path.keys[i + 1];
+    k = smooth01((u - path.at[i]) / (path.at[i + 1] - path.at[i]));
+  }
+  for (let j = 0; j < 3; j++) { p[j] = a.p[j] + (b.p[j] - a.p[j]) * k; d[j] = a.d[j] + (b.d[j] - a.d[j]) * k; }
+}
+
 // ---------------------------------------------------------------------------- per-fighter state
 interface RobotState {
   /** drawing the reduced meshes (far from the camera) */
@@ -259,6 +322,19 @@ interface RobotState {
   hurtT: number;
   hurtX: number;
   hurtZ: number;
+  /** ground roll (dash) and landing roll timers; -1 = not rolling */
+  rollT: number;
+  rollDir: number;
+  rollKind: 'dash' | 'land';
+  hitClip: string;
+  /** melee swing: seconds into the clip (-1 = none), which clip, the last swing time seen, alternating side */
+  meleeT: number;
+  meleeClip: string;
+  meleeSeen: number;
+  meleeFlip: boolean;
+  /** hard (standing) landing timer, -1 = none */
+  hardT: number;
+  pencil: THREE.Mesh | null;
   dead: boolean;
   deadT: number;
   deathDir: THREE.Vector3;
@@ -279,6 +355,9 @@ export interface RobotViewOptions {
   viewPitch: number;
 }
 
+const HURT_TIME = 0.42;
+/** seconds a dash roll / landing roll plays for */
+const ROLL_TIME = { dash: MOVE.rollTime, land: 0.62 };
 const BLEND_SPEED = { walk: 1.6, run: 3.8, sprint: 5.6 };
 
 export class RobotRenderer {
@@ -287,7 +366,10 @@ export class RobotRenderer {
   private acc!: PoseAccumulator;
   private upperMask!: Float32Array;
   private lowerMask!: Float32Array;
-  private masks = new Map<CharKey, { acc: PoseAccumulator; upper: Float32Array; lower: Float32Array }>();
+  private masks = new Map<CharKey, { acc: PoseAccumulator; upper: Float32Array; lower: Float32Array; torso: Float32Array; arms: Float32Array; chest: Float32Array }>();
+  private torsoMask!: Float32Array;
+  private armsMask!: Float32Array;
+  private chestMask!: Float32Array;
   /** what the local player plays as; everyone else wears the other skin so enemies read apart */
   playerChar: CharKey = 'armored';
   private shadows: THREE.InstancedMesh;
@@ -301,14 +383,18 @@ export class RobotRenderer {
   constructor(readonly effects: Effects, private A: RobotAssets, maxChars = 16) {
     for (const k of Object.keys(A.chars) as CharKey[]) {
       const bonesK = A.chars[k].lib.bones;
-      const upper = new Float32Array(bonesK.length), lower = new Float32Array(bonesK.length);
+      const upper = new Float32Array(bonesK.length), lower = new Float32Array(bonesK.length), torso = new Float32Array(bonesK.length);
+      const arms = new Float32Array(bonesK.length), chest = new Float32Array(bonesK.length);
       bonesK.forEach((name, j) => {
         const up = /Spine1|Spine2|Neck|Head|Shoulder|Arm|Hand/.test(name);
         const spine = name === 'Spine';
         upper[j] = up ? 1 : spine ? 0.5 : 0;
         lower[j] = up ? 0 : spine ? 0.5 : 1;
+        torso[j] = /^Spine|Neck|Head/.test(name) && !/Shoulder|Arm|Hand/.test(name) ? 1 : 0;
+        arms[j] = /Shoulder|Arm|Hand/.test(name) ? 1 : 0;
+        chest[j] = up && !arms[j] ? 1 : spine ? 0.5 : 0;
       });
-      this.masks.set(k, { acc: new PoseAccumulator(bonesK.length), upper, lower });
+      this.masks.set(k, { acc: new PoseAccumulator(bonesK.length), upper, lower, torso, arms, chest });
     }
     this.shadows = new THREE.InstancedMesh(
       new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
@@ -362,7 +448,7 @@ export class RobotRenderer {
       rest: bones.map((x) => x.quaternion.clone()),
       hipRest: b.Hips.position.clone(),
       phase: 0, facing: f.yaw, guns: {}, gunKey: null,
-      wasGround: true, landT: 9, airT: 0, hurtT: 0, hurtX: 0, hurtZ: 0,
+      wasGround: true, landT: 9, airT: 0, hurtT: 0, hurtX: 0, hurtZ: 0, rollT: -1, rollDir: 0, rollKind: 'dash', hitClip: 'hitFront', meleeT: -1, meleeClip: 'meleeLight', meleeSeen: -99, meleeFlip: false, hardT: -1, pencil: null,
       dead: false, deadT: 0, deathDir: new THREE.Vector3(), lastShot: -99,
       sk: createSkeleton(), head: new THREE.Vector3(), visibleLast: true, lod: false,
     };
@@ -374,9 +460,14 @@ export class RobotRenderer {
   hurt(id: number, dirX: number, dirZ: number) {
     const c = this.chars.get(id);
     if (!c) return;
-    c.hurtT = 0.22;
+    c.hurtT = HURT_TIME;
     c.hurtX = dirX;
     c.hurtZ = dirZ;
+    // pick the reaction from where the shot came from (bullet direction vs the fighter's facing)
+    const sy = Math.sin(c.facing), cy = Math.cos(c.facing);
+    const along = -(dirX * -sy + dirZ * -cy); // >0: bullet travels against facing = hit from the front
+    const side = dirX * cy - dirZ * sy;
+    c.hitClip = Math.abs(side) > Math.abs(along) ? (side > 0 ? 'hitL' : 'hitR') : along > 0 ? 'hitFront' : 'hitBack';
   }
 
   kill(f: Fighter, dir: Vec3, _headshot: boolean) {
@@ -430,7 +521,7 @@ export class RobotRenderer {
       const onScreen = this.frustum.intersectsSphere(this.sphere);
       if (c.dead) {
         c.deadT += dt;
-        if (c.deadT > 1.4) {
+        if (c.deadT > 2.4) {
           c.root.visible = false;
           continue;
         }
@@ -460,6 +551,9 @@ export class RobotRenderer {
     this.acc = mk.acc;
     this.upperMask = mk.upper;
     this.lowerMask = mk.lower;
+    this.torsoMask = mk.torso;
+    this.armsMask = mk.arms;
+    this.chestMask = mk.chest;
     const local = f.id === view.localId;
     const yaw = local && f.alive ? view.viewYaw : f.prevYaw + angleDelta(f.prevYaw, f.yaw) * alpha;
     const pitch = local && f.alive ? view.viewPitch : f.prevPitch + (f.pitch - f.prevPitch) * alpha;
@@ -508,15 +602,48 @@ export class RobotRenderer {
 
     // air / landing
     if (!f.onGround) c.airT += dt; else c.airT = 0;
-    if (f.onGround && !c.wasGround) c.landT = 0;
+    if (f.onGround && !c.wasGround) {
+      c.landT = 0;
+      // hard landing while moving: tuck into a roll instead of a squash
+      const hs = Math.hypot(f.vel.x, f.vel.z);
+      if (f.lastLandSpeed > 9 && hs > 3.5 && c.rollT < 0 && !f.sliding) { c.rollT = 0; c.rollKind = 'land'; c.rollDir = Math.atan2(-f.vel.x, -f.vel.z); }
+      else if (f.lastLandSpeed > 12 && !f.crouching && L.hardLand) c.hardT = 0;
+    }
     c.wasGround = f.onGround;
+    // ground dash = dodge roll toward the dash direction (the sim owns its timer); a hard landing at speed
+    // tucks into a short visual-only roll
+    if (f.rollTimer > 0) {
+      c.rollKind = 'dash';
+      c.rollT = MOVE.rollTime - f.rollTimer;
+      c.rollDir = Math.atan2(-f.dashDirX, -f.dashDirZ);
+    } else if (c.rollKind === 'dash') c.rollT = -1;
+    else if (c.rollT >= 0) {
+      c.rollT += dt;
+      if (c.rollT >= ROLL_TIME.land || c.dead || f.sliding || !f.onGround) c.rollT = -1;
+    }
+    const rolling = c.rollT >= 0 && !c.dead;
+    // whole-body clip override: roll while rolling, death clip once dead
+    const dying = c.dead;
+    const override: Clip | null = dying ? (L.death ?? null) : rolling ? (c.rollKind === 'dash' ? L.roll : L.rollLand) ?? null : null;
+    const overrideU = dying ? clamp01(c.deadT / (override ? override.duration : 1)) : clamp01(c.rollT / ROLL_TIME[c.rollKind]);
+    if (rolling) c.root.rotation.set(0, c.rollDir + Math.PI, 0);
+    if (dying) c.root.rotation.set(0, Math.atan2(-c.deathDir.x, -c.deathDir.z), 0);
     c.landT += dt;
     c.hurtT = Math.max(0, c.hurtT - dt);
+    if (c.hardT >= 0) { c.hardT += dt; if (!f.onGround || c.hardT >= (L.hardLand?.duration ?? 0)) c.hardT = -1; }
 
     const acc = this.acc;
     acc.reset();
+    const standIdle = L.idleUp ?? L.idle;
+    // idle sway runs at real time, offset per fighter so a crowd does not breathe in unison
+    const idleU = (time / standIdle.duration + f.id * 0.37) % 1;
     const lowerW = 1;
-    if (!f.onGround && !f.sliding) {
+    if (override) {
+      override.accumulate(overrideU, 1, acc);
+    } else if (c.hardT >= 0 && f.onGround) {
+      // heavy landing: absorb with the whole lower body
+      L.hardLand.accumulate(c.hardT / L.hardLand.duration, 1, acc, this.lowerMask);
+    } else if (!f.onGround && !f.sliding) {
       // rising: jump takeoff -> tuck; apex: reach; falling: fall loop
       const vy = f.vel.y;
       const rise = clamp01(vy / 4), fall = clamp01(-vy / 4);
@@ -527,13 +654,53 @@ export class RobotRenderer {
       L.fall.accumulate((c.airT * 0.8) % 1, fall, acc, this.lowerMask);
     } else {
       const idleW = (1 - moveW) * lowerW;
-      L.idle.accumulate((time * 0.33) % 1, idleW * (1 - crouch), acc, this.lowerMask);
-      L.crouchIdle.accumulate((time * 0.4) % 1, idleW * crouch, acc, this.lowerMask);
+      // crouching is the upright stance dropped at the hips; the leg IK below bends the knees
+      standIdle.accumulate(idleU, idleW, acc, this.lowerMask);
       for (const [clip, w] of set) clip.accumulate(c.phase + clip.sync, (w / (wsum || 1)) * moveW * lowerW, acc, this.lowerMask);
       if (c.landT < 0.22) L.land.accumulate(c.landT / 0.22, 0.6 * (1 - c.landT / 0.22), acc, this.lowerMask);
     }
-    // upper body: rifle aiming idle (the IK pass puts the hands on the actual weapon)
-    L.idle.accumulate((time * 0.33) % 1, 1, acc, this.upperMask);
+    // upper body: relaxed upright idle (the IK pass puts the hands on the actual weapon); melee and hit reactions layer on top
+    if (!override) {
+      // melee swing: guard stance for the arms and chest, with the swing clip blended over it
+      let swing: Clip | null = null, swingW = 0, swingU = 0;
+      if (weapon === 'melee' && f.alive) {
+        if (f.lastMeleeTime !== c.meleeSeen) {
+          c.meleeSeen = f.lastMeleeTime;
+          if (f.lastMeleeTime > time - 0.3) {
+            c.meleeT = 0;
+            if (f.lastMeleeHeavy) c.meleeClip = 'meleeHeavy';
+            else { c.meleeFlip = !c.meleeFlip; c.meleeClip = c.meleeFlip ? 'meleeLightB' : 'meleeLight'; }
+          }
+        }
+        if (c.meleeT >= 0) {
+          swing = L[c.meleeClip] ?? null;
+          if (swing) {
+            c.meleeT += dt;
+            swingU = c.meleeT / swing.duration;
+            if (swingU >= 1) c.meleeT = -1;
+            else swingW = smooth01(Math.min(swingU / 0.18, (1 - swingU) / 0.25, 1));
+          } else c.meleeT = -1;
+        }
+        // arms follow the guard / swing clips; the chest keeps the upright idle (the guard's boxer's hunch looks
+        // like a bow over upright legs) and takes only part of the swing's torso twist
+        const guard = L.meleeGuard ?? standIdle, twist = swingW * 0.7;
+        guard.accumulate((time / guard.duration) % 1, 1 - swingW, acc, this.armsMask);
+        standIdle.accumulate(idleU, 1 - twist, acc, this.chestMask);
+        if (swing && swingW > 0) {
+          swing.accumulate(swingU, swingW, acc, this.armsMask);
+          swing.accumulate(swingU, twist, acc, this.chestMask);
+        }
+      } else {
+        c.meleeT = -1;
+        standIdle.accumulate(idleU, 1, acc, this.upperMask);
+      }
+      // hit reaction: the matching flinch clip drives spine, neck and head (arms stay on the gun)
+      if (c.hurtT > 0 && L[c.hitClip]) {
+        const u = 1 - c.hurtT / HURT_TIME;
+        const long = c.hitClip !== 'hitFront';
+        L[c.hitClip].accumulate(u * (long ? 0.45 : 1), Math.sin(Math.min(1, u * 1.15) * Math.PI) * 0.7, acc, this.torsoMask);
+      }
+    }
     // reload body motion (arms are re-targeted below, but the torso dips with the clip)
     const reloading = f.reloadTimer > 0 && def.reloadTime > 0;
     const reloadP = reloading ? 1 - f.reloadTimer / def.reloadTime : -1;
@@ -545,17 +712,16 @@ export class RobotRenderer {
 
     // ---- hips height: crouch / slide drop (legs re-solved with IK below) ----
     buildSkeleton({ pos: { x: px, y: py, z: pz }, vel: f.vel, yaw, pitch, lowerYaw: c.facing, height, gait: f.gait, onGround: f.onGround, sliding: f.sliding, ads }, weapon, c.sk);
-    const crouchMove = crouch * moveW;
-    let hipDrop = (crouchMove * 0.3 + crouch * (1 - moveW) * 0.04) / ROBOT_SCALE;
+    let hipDrop = (crouch * 0.3) / ROBOT_SCALE;
     if (f.sliding) hipDrop = 0.48 / ROBOT_SCALE;
-    c.b.Hips.position.y -= hipDrop;
+    if (!override) c.b.Hips.position.y -= hipDrop;
     // landing squash
-    if (c.landT < 0.25 && f.onGround) c.b.Hips.position.y -= Math.sin((c.landT / 0.25) * Math.PI) * Math.min(0.08, f.lastLandSpeed * 0.008) / ROBOT_SCALE;
+    if (!override && c.landT < 0.25 && f.onGround) c.b.Hips.position.y -= Math.sin((c.landT / 0.25) * Math.PI) * Math.min(0.08, f.lastLandSpeed * 0.008) / ROBOT_SCALE;
 
     c.root.updateMatrixWorld(true);
 
     // ---- legs: keep the clip's feet on the ground after the hips moved ----
-    if (f.onGround && (hipDrop > 1e-4 || f.sliding)) {
+    if (!override && f.onGround && (hipDrop > 1e-4 || f.sliding)) {
       for (const side of ['Left', 'Right'] as const) {
         const up = c.b[`${side}UpLeg`], lo = c.b[`${side}Leg`], foot = c.b[`${side}Foot`];
         const target = foot.getWorldPosition(new THREE.Vector3());
@@ -571,8 +737,10 @@ export class RobotRenderer {
     const right = tv.set(Math.cos(c.facing), 0, -Math.sin(c.facing)).clone();
     const fwd = new THREE.Vector3(-Math.sin(c.facing), 0, -Math.cos(c.facing));
     const lean = f.sliding ? -0.35 : 0;
-    const flinch = c.hurtT > 0 ? Math.sin((c.hurtT / 0.22) * Math.PI) * 0.12 : 0;
-    for (const sb of spineBones) {
+    // a hit jerks the torso along the bullet's direction on top of the flinch clip (peaks early, settles)
+    const hitU = c.hurtT > 0 ? 1 - c.hurtT / HURT_TIME : 1;
+    const flinch = c.hurtT > 0 ? Math.sin(Math.min(1, hitU * 1.6) * Math.PI) * 0.28 : 0;
+    if (!override) for (const sb of spineBones) {
       tq.setFromAxisAngle(right, (pitch + lean) / 3);
       rotateWorld(sb, tq);
       if (flinch) {
@@ -627,6 +795,15 @@ export class RobotRenderer {
       gun.updateMatrixWorld(true);
       const sock = (s: V3, out: THREE.Vector3) => out.set(s[0], s[1], s[2]).applyMatrix4(gun!.matrixWorld);
 
+      if (override) {
+        // rolling / dying: the gun rides in the animated right hand (no aim IK)
+        const hq = c.b.RightHand.getWorldQuaternion(new THREE.Quaternion());
+        qW.copy(hq).multiply(tq2.copy(c.ch.gripRel.right).invert());
+        gun.quaternion.copy(qW);
+        const hp = c.b.RightHand.getWorldPosition(new THREE.Vector3());
+        gun.position.copy(hp).sub(tv.set(mdl.grip[0], mdl.grip[1], mdl.grip[2]).multiplyScalar(mdl.scale).applyQuaternion(qW));
+        gun.updateMatrixWorld(true);
+      } else {
       // ---- arms: IK to the grip and support sockets ----
       const grip = sock(mdl.grip, new THREE.Vector3());
       let support = sock(mdl.support, new THREE.Vector3());
@@ -670,25 +847,43 @@ export class RobotRenderer {
       }
       twoBoneIK(c.b.LeftArm, c.b.LeftForeArm, c.b.LeftHand, support, poleL, supportW);
       if (reloadP < 0 || reloadP > 0.85) setWorldQuat(c.b.LeftHand, tq.copy(qW).multiply(c.ch.gripRel.left));
+      }
+    } else if (weapon === 'melee' && f.alive && !override && f.id === view.hideHeadOf) {
+      // first person: the camera sits in the head, so the third-person guard / swing clips would play below
+      // the screen. Drive the pencil hand along a camera-relative path instead (same timing as the clips).
+      const cp = Math.cos(aimPitch), sp = Math.sin(aimPitch), sy2 = Math.sin(aimYaw), cy2 = Math.cos(aimYaw);
+      const fw = new THREE.Vector3(-sy2 * cp, sp, -cy2 * cp), rt = new THREE.Vector3(cy2, 0, -sy2);
+      const upv = new THREE.Vector3().crossVectors(rt, fw).normalize();
+      const clip = c.meleeT >= 0 ? L[c.meleeClip] : null;
+      const hp: P3 = [0, 0, 0], hd: P3 = [0, 0, 0];
+      meleePose(c.meleeClip, clip ? c.meleeT / clip.duration : -1, hp, hd);
+      const tgt = new THREE.Vector3(eye.x, eye.y, eye.z).addScaledVector(rt, hp[0]).addScaledVector(upv, hp[1]).addScaledVector(fw, hp[2]);
+      twoBoneIK(c.b.RightArm, c.b.RightForeArm, c.b.RightHand, tgt, rt.clone().multiplyScalar(0.7).addScaledVector(upv, -1));
+      const pf = new THREE.Vector3().addScaledVector(rt, hd[0]).addScaledVector(upv, hd[1]).addScaledVector(fw, hd[2]).normalize();
+      const pu = upv.clone().addScaledVector(pf, -upv.dot(pf)).normalize();
+      const pr = new THREE.Vector3().crossVectors(pf, pu);
+      const qP = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(pf, pu, pr));
+      setWorldQuat(c.b.RightHand, tq.copy(qP).multiply(c.ch.gripRel.right));
+      // guard hand: a loose fist low on the left
+      const lt = new THREE.Vector3(eye.x, eye.y, eye.z).addScaledVector(rt, -0.3).addScaledVector(upv, -0.36 + hp[1] * 0.05).addScaledVector(fw, 0.38);
+      twoBoneIK(c.b.LeftArm, c.b.LeftForeArm, c.b.LeftHand, lt, rt.clone().multiplyScalar(-0.7).addScaledVector(upv, -1));
     } else {
-      // melee / unarmed: relaxed arms from the idle clip
+      // melee / unarmed in third person: the guard and swing clips drive the arms
     }
+
+    // ---- the pencil rides in the right hand while the melee weapon is out ----
+    if (weapon === 'melee' && !c.pencil) c.pencil = makePencil(c.ch, c.b.RightHand);
+    if (c.pencil) c.pencil.visible = weapon === 'melee' && f.alive && f.id !== view.hideGunOf;
 
     // ---- head: look along the aim; hidden when the camera sits inside it ----
     c.b.Neck.updateWorldMatrix(true, false);
     tq.setFromAxisAngle(right, pitch * 0.3);
-    rotateWorld(c.b.Head, tq);
+    if (!override) rotateWorld(c.b.Head, tq);
     const hideHead = f.id === view.hideHeadOf && f.alive;
     c.b.Head.scale.setScalar(hideHead ? 0.001 : 1);
 
-    // ---- death: tip over away from the shot, then dissolve ----
-    if (c.dead) {
-      const t = Math.min(1, c.deadT / 0.45);
-      const ax = tv.set(c.deathDir.z, 0, -c.deathDir.x).normalize();
-      c.root.quaternion.premultiply(tq.setFromAxisAngle(ax, (t * t) * 1.45));
-      c.root.position.y -= Math.max(0, c.deadT - 0.6) * 0.5;
-      if (gun) gun.visible = false;
-    }
+    // ---- death: the death clip plays facing the shot (baked in place), then the body dissolves ----
+    if (c.dead && gun) gun.visible = false;
     // spawn protection glow
     c.mat.emissive.setRGB(0, 0, 0);
     if (f.spawnProtect > 0) c.mat.emissive.setRGB(0.35, 0.28, 0.02).multiplyScalar(0.5 + 0.5 * Math.sin(time * 14));
@@ -699,6 +894,10 @@ export class RobotRenderer {
   }
 }
 
+function smooth01(x: number) {
+  const t = clamp01(x);
+  return t * t * (3 - 2 * t);
+}
 function clamp01(x: number) {
   return x < 0 ? 0 : x > 1 ? 1 : x;
 }

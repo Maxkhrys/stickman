@@ -74,6 +74,8 @@ export interface Fighter {
   dashDirX: number;
   dashDirZ: number;
   dashAir: boolean;
+  /** remaining ground-dodge-roll time (> 0 = rolling); drives the roll animation and the tucked hit profile */
+  rollTimer: number;
   lastDashTime: number;
   slideTime: number;
   lastSlideBoostTime: number;
@@ -170,6 +172,7 @@ export function createFighter(id: number, name: string, color: number, kind: Fig
     dashDirX: 0,
     dashDirZ: -1,
     dashAir: false,
+    rollTimer: 0,
     lastDashTime: -99,
     slideTime: 0,
     lastSlideBoostTime: -99,

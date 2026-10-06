@@ -36,6 +36,8 @@ export interface BodyState {
   onGround: boolean;
   sliding: boolean;
   ads: number;
+  /** ground dodge roll time left (Fighter only): tucks the body for the first MOVE.rollLowTime */
+  rollTimer?: number;
 }
 
 export interface Skeleton {
@@ -138,7 +140,8 @@ export function buildSkeleton(s: BodyState, weapon: WeaponId, out: Skeleton): Sk
   set(out.aimUp, sy * sp, cp, cy * sp);
   const uF = out.upperFwd, uR = out.upperRight, lF = out.lowerFwd, lR = out.lowerRight;
 
-  const c = clamp((MOVE.standHeight - s.height) / (MOVE.standHeight - MOVE.crouchHeight), 0, 1);
+  const tucked = (s.rollTimer ?? 0) > MOVE.rollTime - MOVE.rollLowTime;
+  const c = clamp((MOVE.standHeight - (tucked ? Math.min(s.height, MOVE.crouchHeight) : s.height)) / (MOVE.standHeight - MOVE.crouchHeight), 0, 1);
   const slide = s.sliding ? 1 : 0;
   const air = s.onGround ? 0 : 1;
   const hs = Math.hypot(s.vel.x, s.vel.z);

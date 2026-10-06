@@ -23,7 +23,7 @@ All three characters share one controller, hitboxes, weapons and ADS.
 |---|---|
 | WASD | run / strafe |
 | Space | jump; once more in the air for the air jump (needs a fresh press) |
-| Shift | dash (2 charges, refill 2.4 s each; one dash per airtime) |
+| Shift | dash (2 charges, refill 2.4 s each; one dash per airtime). On the ground it is a dodge roll (see `COMBAT_FEEL.md`) |
 | C | crouch; while running = momentum slide |
 | RMB | scope / ADS (~150 ms for the sniper) |
 | LMB | fire (one shot per press for the sniper) |

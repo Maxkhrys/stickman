@@ -52,6 +52,10 @@ export const MOVE = {
   dashTime: 0.15,
   /** speed the dash hands back to normal movement; overspeed then bleeds off smoothly */
   dashExitSpeed: 9.5,
+  /** a ground dash is a dodge roll: this long it plays, and for the first rollLowTime of it the body is tucked
+   *  (hitboxes shrink to the crouch profile) */
+  rollTime: 0.5,
+  rollLowTime: 0.36,
   /** minimum time between two dashes */
   dashGap: 0.2,
   /** air dashes allowed per airtime */

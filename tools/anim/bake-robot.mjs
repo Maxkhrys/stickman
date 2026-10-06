@@ -251,7 +251,6 @@ export const PICKS = [
   ['runL', M + 'Standing Run Left', { loop: true }],
   ['runR', M + 'Standing Run Right', { loop: true }],
   ['sprint', M + 'Standing Sprint Forward', { loop: true }],
-  ['crouchIdle', P + 'sword and shield crouch idle', { loop: true }],
   // Air: rifle jump split into takeoff, tuck and reach-for-floor; vertical travel removed
   // (the controller owns height). Falling idle for long drops.
   ['jump', S + 'rifle jump', { trim: [f(2), f(9)], flatY: true }],
@@ -268,6 +267,27 @@ export const PICKS = [
   ['walkSniper', MAX + '#walking holding a sniper.001', { loop: true, trim: [f(18), f(54)], strideFromTravel: true, center: true }],
   ['walkSniperAdsR', MAX + '#aimed down sights with sniper walking.001', { loop: true, trim: [f(30), f(66)], strideFromTravel: true, center: true }],
   ['walkSniperAdsL', MAX + '#aimed down sights with sniper walking.001', { loop: true, trim: [f(30), f(66)], strideFromTravel: true, mirror: true, center: true }],
+  // ---- combat / traversal pass ----
+  // Relaxed upright stance for the legs and spine (the rifle idle is a deep bladed crouch). The arms are IK'd
+  // onto the weapon, so only legs, hips and spine of this clip show.
+  ['idleUp', 'Locomotion Pack/idle', { loop: true }],
+  // Dodge roll (ground dash): the tumble part of the sprinting roll, sped up to fit MOVE.rollTime.
+  ['roll', G + 'Sprinting Forward Roll', { trim: [f(11), f(35)], speed: 1.6 }],
+  // Landing roll (hard landing at speed) and heavy landing (hard landing standing still).
+  ['rollLand', A + 'falling to roll', { trim: [f(10), f(44)], speed: 1.5 }],
+  ['hardLand', A + 'hard landing', { trim: [f(8), f(48)], speed: 2 }],
+  // Hit reactions: front (Basic Shooter) and large flinches from the left / back, mirrored for the right.
+  ['hitFront', S + 'hit reaction', {}],
+  ['hitL', G + 'Standing React Large From Left', {}],
+  ['hitR', G + 'Standing React Large From Left', { mirror: true }],
+  ['hitBack', G + 'Standing React Large From Back', {}],
+  ['death', P + 'sword and shield death', {}],
+  // Melee ("Pencil"): fighting guard for the arms and torso, a quick overhead cut (alternating sides) and
+  // a heavy lunging slash. They overlay the torso and arms; the legs keep the locomotion cycle.
+  ['meleeGuard', P + 'sword and shield idle (4)', { loop: true }],
+  ['meleeLight', P + 'sword and shield slash (3)', { trim: [f(15), f(42)], speed: 2.6 }],
+  ['meleeLightB', P + 'sword and shield slash', { trim: [f(12), f(35)], speed: 2.4 }],
+  ['meleeHeavy', P + 'sword and shield attack (2)', { trim: [0, f(31)], speed: 1.8 }],
 ];
 
 const [cmd, dir, outFile] = process.argv.slice(2);

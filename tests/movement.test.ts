@@ -4,6 +4,7 @@ import { MOVE } from '../src/config/movement';
 import { WEAPONS } from '../src/config/weapons';
 import { FixedLoop } from '../src/core/Loop';
 import { computeSpread } from '../src/sim/combat';
+import { buildHitboxes } from '../src/sim/hitboxes';
 import { createFighter, eyePos, type Fighter } from '../src/sim/fighter';
 import { MAPS, type Box, type MapDef } from '../src/sim/map';
 import { FOUNDRY_GEOM } from '../src/sim/maps/foundry';
@@ -129,6 +130,31 @@ function rig(world: World, x = 0, y = 0, z = 0, yaw = 0, loadout: Parameters<typ
   const { f, run } = rig(worldOf());
   run(0.25, (c, i) => { c.strafe = -1; if (i === 0) c.buttons = BTN.DASH; });
   check('dash follows the held direction', f.pos.x < -2 && Math.abs(f.pos.z) < 0.1, `moved to x ${f.pos.x.toFixed(2)}, z ${f.pos.z.toFixed(2)}`);
+}
+{
+  // ground dash = dodge roll: the timer runs for rollTime, the hit profile tucks for the first rollLowTime,
+  // air dashes and jumps never roll
+  const { f, run } = rig(worldOf());
+  const headY = () => buildHitboxes(f)[0].a.y - f.pos.y;
+  const standing = headY();
+  run(0.04, (c, i) => { c.forward = 1; if (i === 0) c.buttons = BTN.DASH; });
+  const early = f.rollTimer, tucked = headY();
+  run(MOVE.rollLowTime + 0.02);
+  const late = headY();
+  run(MOVE.rollTime);
+  check('ground dash starts a dodge roll', early > MOVE.rollTime - 0.1 && early <= MOVE.rollTime, `rollTimer ${early.toFixed(2)} s after the press (rollTime ${MOVE.rollTime})`);
+  check('rolling tucks the hitboxes, standing back up restores them', tucked < standing - 0.35 && Math.abs(late - standing) < 0.05, `head ${standing.toFixed(2)} m standing, ${tucked.toFixed(2)} m rolling, ${late.toFixed(2)} m after`);
+  check('the roll ends on time', f.rollTimer === 0, `rollTimer ${f.rollTimer.toFixed(2)} s`);
+}
+{
+  const { f, run } = rig(worldOf());
+  run(0.06, (c, i) => { c.forward = 1; if (i === 0) c.buttons = BTN.DASH; });
+  run(0.02, (c) => { c.forward = 1; c.buttons = BTN.JUMP; });
+  check('jumping out of a roll cancels it', f.rollTimer === 0 && !f.onGround, `rollTimer ${f.rollTimer.toFixed(2)}, onGround ${f.onGround}`);
+  const air = rig(worldOf());
+  air.run(0.1, (c, i) => { c.forward = 1; if (i === 0) c.buttons = BTN.JUMP; });
+  air.run(0.05, (c, i) => { c.forward = 1; if (i === 0) c.buttons = BTN.DASH; });
+  check('an air dash does not roll', air.f.dashAir && air.f.rollTimer === 0, `dashAir ${air.f.dashAir}, rollTimer ${air.f.rollTimer}`);
 }
 {
   // dash -> slide does not chain the burst speed

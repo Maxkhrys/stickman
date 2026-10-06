@@ -26,7 +26,7 @@ Or import the repo in the Vercel dashboard. No settings needed.
 |---|---|
 | WASD | move |
 | Space | jump; press again in the air for the air jump (jump buffer + coyote time) |
-| Shift | dash (2 charges, one in the air per airtime) |
+| Shift | dash (2 charges, one in the air per airtime); on the ground it is a dodge roll |
 | C | crouch; while running = momentum slide |
 | LMB / RMB | fire / aim down sights (sniper: scope in ~150 ms, one shot per press) |
 | R, 1–4, wheel | reload, weapons |
@@ -54,7 +54,8 @@ Weapon tuning lives in `src/config/weapons.ts`; movement in `src/config/movement
 
 The sniper & movement upgrade (Foundry map, armored character, shoulder camera, ADS into the sights)
 is documented in [docs/SNIPER_UPGRADE.md](docs/SNIPER_UPGRADE.md); clip sources in
-[docs/ANIMATION_SOURCES.md](docs/ANIMATION_SOURCES.md).
+[docs/ANIMATION_SOURCES.md](docs/ANIMATION_SOURCES.md). The animation fix, dodge roll, melee and hit/death pass is in
+[docs/COMBAT_FEEL.md](docs/COMBAT_FEEL.md).
 Architecture and the multiplayer plan: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Armory update

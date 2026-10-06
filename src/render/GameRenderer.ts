@@ -111,6 +111,8 @@ export class GameRenderer {
   private fovPunch = new Spring(260, 22);
   private shake = 0;
   private roll = 0;
+  /** camera lean into a dodge roll (rad, eased) */
+  private rollTilt = 0;
   private fovKick = 0;
   /** camera-only smoothing of instant step-ups (stairs, ramp lips); the fighter's position is untouched */
   private stepOff = 0;
@@ -225,6 +227,11 @@ export class GameRenderer {
     // FOV punch: feels punchy without moving the aim point
     this.fovPunch.v += amount * 40;
   }
+  /** local dash / dodge roll started: FOV punch and a small camera dip (presentation only) */
+  dashFx(air: boolean) {
+    this.fovPunch.v += (air ? 0.8 : 1.4) * 40;
+    if (!air) this.dip.v -= 1.2;
+  }
   land(speed: number) {
     if (speed < 3) return;
     this.dip.v -= Math.min(speed, 22) * 0.06;
@@ -315,6 +322,12 @@ export class GameRenderer {
       const lvx = me.vel.x * cy - me.vel.z * sy;
       const targetRoll = ((me.sliding ? 0.06 : 0) + (-lvx / MOVE.maxSpeed) * 0.01) * ms * (1 - adsE);
       this.roll += (targetRoll - this.roll) * (1 - Math.exp(-8 * dt));
+      // dodge roll: lean the first-person camera into the roll, easing in fast and out slowly
+      const rollP = me.rollTimer > 0 ? 1 - me.rollTimer / MOVE.rollTime : -1;
+      const rollEnv = rollP >= 0 ? Math.sin(Math.min(1, rollP) * Math.PI) : 0;
+      const dashRight = me.dashDirX * cy - me.dashDirZ * sy;
+      const rollTarget = -dashRight * 0.2 * rollEnv * ms * (1 - adsE);
+      this.rollTilt += (rollTarget - this.rollTilt) * (1 - Math.exp(-(rollTarget === 0 ? 7 : 16) * dt));
 
       // gameplay recoil, shown immediately (latest sim state + analytic impulse decay):
       // the screen centre is exactly where the next shot goes.
@@ -393,7 +406,7 @@ export class GameRenderer {
       this.renderYaw = viewYaw;
       this.renderPitch = viewPitch;
       if (me.alive) {
-        this.camera.rotation.set(viewPitch + rp, viewYaw + ry, (tp ? 0 : this.roll) + shakeRoll + (tp ? 0 : Math.sin(this.bobPhase) * 0.002 * this.bobAmt * calm));
+        this.camera.rotation.set(viewPitch + rp, viewYaw + ry, (tp ? 0 : this.roll + this.rollTilt) + shakeRoll + (tp ? 0 : Math.sin(this.bobPhase) * 0.002 * this.bobAmt * calm));
       } else {
         this.camera.position.set(px, camY, pz);
         if (fi.deathLook) {
@@ -413,7 +426,7 @@ export class GameRenderer {
 
       // ---- FOV: speed kick at hip, iron-sight zoom, scope zoom synced with the overlay ----
       const speedKick = Math.max(0, Math.min(1, (hs - MOVE.maxSpeed * 0.9) / 6));
-      const targetKick = this.fovKickOn ? (speedKick * 7 + (me.sliding ? 5 : 0)) * (1 - adsE) : 0;
+      const targetKick = this.fovKickOn ? (speedKick * 7 + (me.sliding ? 5 : 0) + (me.rollTimer > 0 ? 4 : 0)) * (1 - adsE) : 0;
       this.fovKick += (targetKick - this.fovKick) * (1 - Math.exp(-6 * dt));
       const hipH = ((fi.hfov + this.fovKick + this.fovPunch.x) * Math.PI) / 360;
       let tanV = Math.tan(hipH) / this.camera.aspect;

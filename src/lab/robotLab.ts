@@ -6,7 +6,8 @@ import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { loadClipLibrary, PoseAccumulator } from '../render/robot/clips';
 
 const qs = new URLSearchParams(location.search);
-const lib = await loadClipLibrary(qs.get('lib') ?? '/assets/robot/_candidates.json');
+const char = qs.get('char') ?? 'robot';
+const lib = await loadClipLibrary(qs.get('lib') ?? `/assets/${char}/anims.json`);
 const names = (qs.get('clips') ?? Object.keys(lib.clips).slice(0, 4).join(',')).split(',');
 const phases = Number(qs.get('phases') ?? 5);
 const view = qs.get('view') ?? 'side';
@@ -21,13 +22,13 @@ scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 2.2));
 const sun = new THREE.DirectionalLight(0xffffff, 2);
 sun.position.set(2, 4, 3);
 scene.add(sun);
-const gltf = await new GLTFLoader().loadAsync('/assets/robot/robot.glb');
+const gltf = await new GLTFLoader().loadAsync(`/assets/${char}/${char}.glb`);
 const S = 1.8;
 const lbl = document.getElementById('lbl')!;
 const acc = new PoseAccumulator(lib.bones.length);
 const q = new THREE.Quaternion();
 names.forEach((name, row) => {
-  const clip = lib.clips[name];
+  const clip = lib.clips[name] ?? lib.clips.idle;
   for (let c = 0; c < phases; c++) {
     const m = SkeletonUtils.clone(gltf.scene);
     m.scale.setScalar(S);
@@ -40,11 +41,13 @@ names.forEach((name, row) => {
     m.traverse((o) => { if ((o as THREE.Bone).isBone) bones[o.name.replace(/^mixamorig:?/, '')] = o as THREE.Bone; });
     const u = phases === 1 ? 0 : c / (phases - (clip.loop ? 0 : 1));
     acc.reset();
-    clip.accumulate(u, 1, acc);
-    lib.bones.forEach((b, j) => acc.read(j, bones[b].quaternion, q));
-    bones.Hips.position.x += acc.hip[0];
-    bones.Hips.position.y += acc.hip[1];
-    bones.Hips.position.z += acc.hip[2];
+    if (name !== 'rest') {
+      clip.accumulate(u, 1, acc);
+      lib.bones.forEach((b, j) => acc.read(j, bones[b].quaternion, q));
+      bones.Hips.position.x += acc.hip[0];
+      bones.Hips.position.y += acc.hip[1];
+      bones.Hips.position.z += acc.hip[2];
+    }
     const d = document.createElement('div');
     d.style.cssText = `position:absolute;left:${c * 220 + 4}px;top:${row * 260 + 4}px;color:#fff`;
     d.textContent = `${name} ${u.toFixed(2)}`;

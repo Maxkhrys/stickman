@@ -1,6 +1,8 @@
-import { chromium } from '/home/claude/stickman/node_modules/playwright/index.mjs';
+import { chromium } from 'playwright';
 // Deterministic gameplay capture: the game loop is stopped and advanced by exactly 1/FPS per frame,
-// so the clip plays at real speed whatever the (software) GPU manages. Usage: node capture.mjs outDir
+// so the clip plays at real speed whatever the (software) GPU manages.
+// Usage (dev server on 127.0.0.1:5178): node tools/capture/gameplay.mjs <framesDir>
+//   then: ffmpeg -framerate 30 -i <framesDir>/f%04d.png -c:v libx264 -pix_fmt yuv420p docs/media/gameplay.mp4
 const out = process.argv[2], FPS = 30;
 const browser = await chromium.launch({ args: ['--no-sandbox', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });

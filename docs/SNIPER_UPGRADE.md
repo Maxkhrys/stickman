@@ -99,7 +99,7 @@ first, then `LOD_DISTANCE`.
 
 ## Gameplay recording
 
-`docs/media/gameplay.mp4` (10 s, 30 fps): captured by stepping the game loop exactly 1/30 s per frame
+`docs/media/gameplay.mp4` (10 s, 30 fps, `tools/capture/gameplay.mjs`): captured by stepping the game loop exactly 1/30 s per frame
 in headless Chromium, so it plays at real speed even though the software renderer is slow. It shows the
 sniper run, jump + air jump + air dash, slide, quickscope, shoulder swap and an airborne quickscope.
 

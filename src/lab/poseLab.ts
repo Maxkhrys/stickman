@@ -34,10 +34,14 @@ type Setup = Partial<Fighter> & {
   w: WeaponId; vx?: number; vz?: number;
   /** melee swing that began this many seconds before the end of the run */
   swing?: { heavy?: boolean; ago: number };
-  /** dodge roll progress 0..1 */
+  /** dodge roll progress 0..1, and the dash direction in degrees from the aim (0 forward, +90 right) */
   roll?: number;
-  /** hit reaction from this bullet direction, that many seconds before the end */
-  hit?: { dx: number; dz: number; ago: number };
+  rdir?: number;
+  /** velocity in the facing frame (m/s forward / right) */
+  vf?: number;
+  vr?: number;
+  /** hit reaction from a bullet travelling along (f) / across (r) the facing, that many seconds before the end (f -1 = from the front) */
+  hit?: { f: number; r: number; ago: number; head?: boolean };
   /** killed this many seconds before the end */
   deadAgo?: number;
 };
@@ -51,19 +55,33 @@ const setups: Setup[] = qs.get('set') === 'melee'
       ...[0.1, 0.22, 0.34, 0.48, 0.62].map((ago) => ({ w: 'melee' as WeaponId, swing: { heavy: true, ago } })),
     ]
   : qs.get('set') === 'roll'
-  ? row(7, (i) => ({ w: weaponQ ?? 'ar', roll: (i + 0.5) / 7, vz: -9 }))
+  ? row(7, (i) => ({ w: weaponQ ?? 'ar', roll: (i + 0.5) / 7, rdir: Number(qs.get('rdir') ?? 0), vf: 9 }))
+  : qs.get('set') === 'rolldirs'
+  ? [0, 90, -90, 155, -155].flatMap((rdir) => [0.18, 0.4, 0.62].map((roll) => ({ w: weaponQ ?? 'ar', roll, rdir, vf: 9 })))
+  : qs.get('set') === 'crouchwalk'
+  ? [
+      { w: 'ar', crouching: true, height: MOVE.crouchHeight },
+      { w: 'ar', crouching: true, height: MOVE.crouchHeight, vf: 2.8 },
+      { w: 'ar', crouching: true, height: MOVE.crouchHeight, vf: -2.8 },
+      { w: 'ar', crouching: true, height: MOVE.crouchHeight, vr: 2.8 },
+      { w: 'ar', crouching: true, height: MOVE.crouchHeight, vr: -2.8 },
+      { w: 'ar', vf: 6.4 },
+      { w: 'ar', vf: 9.5 },
+      { w: 'ar', sliding: true, height: MOVE.crouchHeight, vf: 10 },
+    ]
   : qs.get('set') === 'react'
   ? [
-      { w: 'ar', hit: { dx: 0, dz: 1, ago: 0.08 } },
-      { w: 'ar', hit: { dx: 0, dz: 1, ago: 0.2 } },
-      { w: 'ar', hit: { dx: 1, dz: 0, ago: 0.12 } },
-      { w: 'ar', hit: { dx: 1, dz: 0, ago: 0.24 } },
-      { w: 'ar', hit: { dx: 0, dz: -1, ago: 0.12 } },
-      { w: 'ar', hit: { dx: 0, dz: -1, ago: 0.26 } },
-      { w: 'ar', deadAgo: 0.4 },
+      { w: 'ar' },
+      { w: 'ar', hit: { f: -1, r: 0, ago: 0.12 } },
+      { w: 'ar', hit: { f: -1, r: 0, ago: 0.24 } },
+      { w: 'ar', hit: { f: 0, r: 1, ago: 0.14 } },
+      { w: 'ar', hit: { f: 0, r: -1, ago: 0.14 } },
+      { w: 'ar', hit: { f: 1, r: 0, ago: 0.14 } },
+      { w: 'ar', hit: { f: -1, r: 0, ago: 0.12, head: true } },
+      { w: 'ar', hit: { f: -1, r: 0, ago: 0.26, head: true } },
+      { w: 'ar', hit: { f: -1, r: 0, ago: 0.42, head: true } },
       { w: 'ar', deadAgo: 0.9 },
-      { w: 'ar', deadAgo: 1.5 },
-      { w: 'ar', deadAgo: 2.2 },
+      { w: 'ar', deadAgo: 1.8 },
     ]
   : qs.get('set') === 'stance'
   ? [
@@ -77,20 +95,20 @@ const setups: Setup[] = qs.get('set') === 'melee'
     ]
   : qs.get('set') === 'moves'
   ? [
-      { w: weaponQ ?? 'sniper', vz: -6.4 },
-      { w: weaponQ ?? 'sniper', vx: 6 },
-      { w: weaponQ ?? 'sniper', vz: 5 },
+      { w: weaponQ ?? 'sniper', vf: 6.4 },
+      { w: weaponQ ?? 'sniper', vr: 6 },
+      { w: weaponQ ?? 'sniper', vf: -5 },
       { w: weaponQ ?? 'sniper', crouching: true, height: MOVE.crouchHeight },
-      { w: weaponQ ?? 'sniper', sliding: true, height: MOVE.crouchHeight, vz: -10 },
-      { w: weaponQ ?? 'sniper', onGround: false, vz: -5, vy: 3 } as Setup,
+      { w: weaponQ ?? 'sniper', sliding: true, height: MOVE.crouchHeight, vf: 10 },
+      { w: weaponQ ?? 'sniper', onGround: false, vf: 5, vy: 3 } as Setup,
     ]
   : qs.get('set') === 'walks'
   ? [
-      { w: 'ar', vz: -1.5 },
-      { w: 'sniper', vz: -1.5 },
-      { w: 'sniper', vz: -1.2, ads: 1 },
-      { w: 'sniper', vx: 1.2, ads: 1 },
-      { w: 'sniper', vx: -1.2, ads: 1 },
+      { w: 'ar', vf: 1.5 },
+      { w: 'sniper', vf: 1.5 },
+      { w: 'sniper', vf: 1.2, ads: 1 },
+      { w: 'sniper', vr: 1.2, ads: 1 },
+      { w: 'sniper', vr: -1.2, ads: 1 },
     ]
   : (['sniper', 'ar', 'smg', 'pistol'] as WeaponId[]).flatMap((w) => [{ w, ads: adsQ }, { w, ads: 1 }]);
 const fighters: Fighter[] = setups.map((s, i) => {
@@ -114,15 +132,15 @@ const fighters: Fighter[] = setups.map((s, i) => {
 });
 setups.forEach((s, i) => {
   const f = fighters[i];
-  if (s.roll !== undefined) { f.dashDirX = 0; f.dashDirZ = -1; f.rollTimer = MOVE.rollTime * (1 - s.roll); f.dashAir = false; }
+  if (s.roll !== undefined) { f.rollTimer = MOVE.rollTime * (1 - s.roll); f.dashAir = false; }
   if (s.deadAgo !== undefined) f.alive = true;
 });
 const cam = new THREE.PerspectiveCamera(view === 'fp' ? 60 : 32, W / H, 0.03, 200);
 const span = setups.length * 1.9;
 const zoom = Number(qs.get('zoom') ?? 1);
 if (view === 'side') { cam.position.set(0, 1.1, (span * 1.3) / zoom); }
-else if (view === 'front') { cam.position.set(0, 1.4, -span * 1.25); }
-else if (view === 'back') { cam.position.set(0, 1.6, span * 1.25); }
+else if (view === 'front') { cam.position.set(0, 1.1, (-span * 1.25) / zoom); }
+else if (view === 'back') { cam.position.set(0, 1.2, (span * 1.25) / zoom); }
 else if (view === 'top') { cam.position.set(0, span * 1.4, 0.01); }
 else { cam.position.set(span * 0.55, 2.2, -span * 0.95); }
 cam.lookAt(0, 1.0, 0);
@@ -138,6 +156,19 @@ if (focus !== null) {
   cam.updateProjectionMatrix();
 }
 if (view === 'side') { fighters.forEach((f) => { f.yaw = f.prevYaw = -Math.PI / 2 + Number(qs.get('yaw') ?? 0); }); }
+setups.forEach((s, i) => {
+  const f = fighters[i];
+  const fx = -Math.sin(f.yaw), fz = -Math.cos(f.yaw), rx = Math.cos(f.yaw), rz = -Math.sin(f.yaw);
+  if (s.vf !== undefined || s.vr !== undefined) {
+    f.vel.x = fx * (s.vf ?? 0) + rx * (s.vr ?? 0);
+    f.vel.z = fz * (s.vf ?? 0) + rz * (s.vr ?? 0);
+  }
+  if (s.roll !== undefined) {
+    const a = ((s.rdir ?? 0) * Math.PI) / 180;
+    f.dashDirX = fx * Math.cos(a) + rx * Math.sin(a);
+    f.dashDirZ = fz * Math.cos(a) + rz * Math.sin(a);
+  }
+});
 const idx = Number(qs.get('fp') ?? 0);
 if (view === 'fp') {
   const f = fighters[idx];
@@ -154,7 +185,10 @@ for (let i = 0; i < N; i++) {
   setups.forEach((s, k) => {
     const f = fighters[k], trigger = (ago: number) => now >= t - ago && now - t / N < t - ago;
     if (s.swing && trigger(s.swing.ago)) { f.lastMeleeTime = now; f.lastMeleeHeavy = !!s.swing.heavy; }
-    if (s.hit && trigger(s.hit.ago)) { rr.hurt(f.id, s.hit.dx, s.hit.dz); }
+    if (s.hit && trigger(s.hit.ago)) {
+      const fx = -Math.sin(f.yaw), fz = -Math.cos(f.yaw), rx = Math.cos(f.yaw), rz = -Math.sin(f.yaw);
+      rr.hurt(f.id, fx * s.hit.f + rx * s.hit.r, fz * s.hit.f + rz * s.hit.r, s.hit.head);
+    }
     if (s.deadAgo !== undefined && trigger(s.deadAgo)) f.alive = false;
   });
   rr.update(t / N, fighters, 1, now, world, cam, { hideHeadOf: view === 'fp' ? idx : -1, localId: -1, viewYaw: 0, viewPitch: 0 });

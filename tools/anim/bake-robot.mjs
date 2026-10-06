@@ -4,6 +4,8 @@
 //   node tools/anim/bake-robot.mjs catalog <packsDir>             measure every clip in every pack
 //   node tools/anim/bake-robot.mjs check <packsDir>               print rest-pose axes of source and robot
 //   node tools/anim/bake-robot.mjs bake <packsDir> <out.json>     bake PICKS
+//   node tools/anim/bake-robot.mjs glb <file.glb> <out.json>      bake every clip of a Tripo GLB whole (to look at them:
+//                                                                 robotlab.html?lib=..., tools/anim/loops.mjs, windows.mjs)
 //
 // <packsDir> holds the unzipped packs from the anthonysadveture repo ("Basic Shooter Pack/...", etc.)
 // plus a "Singles" folder for the loose FBX files. Raw packs stay out of this repo (size + licence).
@@ -192,6 +194,7 @@ function measure(clip) {
 }
 
 const r4 = v => Math.round(v * 1e4) / 1e4;
+const ROBOT_SCALE_M = 1.8; // robot units are 1 = full height; the game draws the characters 1.8 m tall
 /** Left/right mirror (x -> -x) of a sampled clip: each bone takes its opposite's rest-relative rotation. */
 function mirrorClip(clip) {
   const opp = n => n.startsWith('Left') ? 'Right' + n.slice(4) : n.startsWith('Right') ? 'Left' + n.slice(5) : n;
@@ -231,11 +234,13 @@ function bake(clip, { loop = false, trim = [0, Infinity], speed = 1, flatY = fal
     const cx = center ? a.x - P0.Hips.x : 0, cz = center ? a.z - P0.Hips.z : 0;
     hip.push(r4(fr.hip.x - off.x - cx - P0.Hips.x), r4((flatY ? a.y : fr.hip.y) - P0.Hips.y), r4(fr.hip.z - off.z - cz - P0.Hips.z));
   });
-  return { frames: n, fps: FPS * speed, loop, stride: r4((strideFromTravel ? m.rootSpeed : m.stride) * speed), travel: r4(m.rootSpeed * speed), sync: r4(m.sync), q: Buffer.from(q.buffer).toString('base64'), hip };
+  // net hip travel over the window, for the log: direction in the character frame (0 = forward, +90 = its left, -90 = its right) and metres
+  const hipDir = Math.round(Math.atan2(z.x - a.x, z.z - a.z) * 180 / Math.PI), hipDist = Math.hypot(z.x - a.x, z.z - a.z) * ROBOT_SCALE_M;
+  return { frames: n, fps: FPS * speed, loop, stride: r4((strideFromTravel ? m.rootSpeed : m.stride) * speed), travel: r4(m.rootSpeed * speed), sync: r4(m.sync), hipDir, hipDist: r4(hipDist), footDir: Math.round(m.dir), q: Buffer.from(q.buffer).toString('base64'), hip };
 }
 
 // Chosen clips: [runtime name, pack/file, options]. Reasons in docs/ANIMATION_SOURCES.md.
-const MAX = 'Max/walking with sniper.glb';
+const MAX = 'Max/all.glb'; // Max's Tripo export "Update all animations" (16 clips on the robot rig, 5 s windows at 24 fps)
 const S = 'Basic Shooter Pack/', A = 'Action Adventure Pack/', M = 'Magic Locomotion Pack/', P = 'Pro Sword and Shield Pack/', G = 'Singles/', f = x => x / FPS;
 export const PICKS = [
   // Rifle stance: full body at rest, and the upper-body base layer while moving.
@@ -261,20 +266,38 @@ export const PICKS = [
   // Upper-body actions.
   ['reload', S + 'reloading', {}],
   ['fire', S + 'firing rifle', {}],
-  // Sniper walk pair from Max (Tripo export on the robot rig): hip carry and scoped walk.
-  // Each is trimmed to one whole step cycle (the export runs 4 1/6), matching the other walks; the scoped one is a
-  // sidestep to the right while aiming, mirrored for the left. Planted-foot speed = root travel.
-  ['walkSniper', MAX + '#walking holding a sniper.001', { loop: true, trim: [f(18), f(54)], strideFromTravel: true, center: true }],
-  ['walkSniperAdsR', MAX + '#aimed down sights with sniper walking.001', { loop: true, trim: [f(30), f(66)], strideFromTravel: true, center: true }],
-  ['walkSniperAdsL', MAX + '#aimed down sights with sniper walking.001', { loop: true, trim: [f(30), f(66)], strideFromTravel: true, mirror: true, center: true }],
+  // Sniper walk pair from Max (Tripo export on the robot rig): hip carry and scoped walk. Each is trimmed to one whole
+  // gait cycle (the export runs several, see tools/anim/loops.mjs); the scoped one is a sidestep while aiming,
+  // mirrored for the other side. Planted-foot speed = root travel.
+  ['walkSniper', MAX + '#walking holding a sniper.001', { loop: true, trim: [f(47), f(82)], strideFromTravel: true, center: true }],
+  ['walkSniperAdsR', MAX + '#aimed down sights with sniper walking.001', { loop: true, trim: [f(54), f(88)], strideFromTravel: true, center: true }],
+  ['walkSniperAdsL', MAX + '#aimed down sights with sniper walking.001', { loop: true, trim: [f(54), f(88)], strideFromTravel: true, mirror: true, center: true }],
   // ---- combat / traversal pass ----
   // Relaxed upright stance for the legs and spine (the rifle idle is a deep bladed crouch). The arms are IK'd
   // onto the weapon, so only legs, hips and spine of this clip show.
   ['idleUp', 'Locomotion Pack/idle', { loop: true }],
-  // Dodge roll (ground dash): the tumble part of the sprinting roll, sped up to fit MOVE.rollTime.
-  ['roll', G + 'Sprinting Forward Roll', { trim: [f(11), f(35)], speed: 1.6 }],
-  // Landing roll (hard landing at speed) and heavy landing (hard landing standing still).
-  ['rollLand', A + 'falling to roll', { trim: [f(10), f(44)], speed: 1.5 }],
+  // ---- Max's "Update all animations" pack (Tripo, robot rig). Windows were found with tools/anim/loops.mjs and
+  // the activity columns of tools/anim/windows.mjs; the exports are 5 s long with the action somewhere inside.
+  // Dodge rolls, armed: forward roll (also the landing roll) and the two side rolls, each sped up to ~0.5 s.
+  ['roll', MAX + '#armed with rifle roll.001', { trim: [f(22), f(89)], speed: 4.4 }],
+  ['rollL', MAX + '#Side dodge rolls left holding a rifle.001', { trim: [f(28), f(108)], speed: 5.3 }],
+  ['rollR', MAX + '#Side dodge rolls right holding a rifle.001', { trim: [f(24), f(104)], speed: 5.3 }],
+  ['sideDive', MAX + '#sideways armed with rifle roll fast dive.001', { trim: [f(24), f(100)], speed: 5 }],
+  ['sideDiveL', MAX + '#sideways armed with rifle roll fast dive.001', { trim: [f(24), f(100)], speed: 5, mirror: true }],
+  // Slide: the export squats for 3 s and then stands up. A held squat pose (static) and the stand-up as the exit.
+  ['slideHold', MAX + '#Slide with a rifle..001', { trim: [f(60), f(62)] }],
+  ['slideExit', MAX + '#Slide with a rifle..001', { trim: [f(104), f(136)], speed: 3.2 }],
+  // Crouch walks (rifle up): one gait cycle each, root travel gives the foot speed. crouchIdle is the first frame of the forward one.
+  ['crouchIdle', MAX + '#Crouch walk with a rifle forward.001', { trim: [0, f(2)] }],
+  ['crouchF', MAX + '#Crouch walk with a rifle forward.001', { loop: true, trim: [f(100), f(133)], strideFromTravel: true, center: true }],
+  ['crouchB', MAX + '#Crouch walk with a rifle backwards.001', { loop: true, trim: [f(100), f(127)], strideFromTravel: true, center: true }],
+  ['crouchL', MAX + '#Crouch walk with a rifle left.001', { loop: true, trim: [f(50), f(88)], strideFromTravel: true, center: true }],
+  ['crouchR', MAX + '#Crouch walk with a rifle right.001', { loop: true, trim: [f(27), f(61)], strideFromTravel: true, center: true }],
+  // Aggressive rifle sprint (one cycle, 0.6 s) and the head-snap reaction / sniper bolt cycle (torso and arms overlays).
+  ['sprintRifle', MAX + '#sprinting with rifle aggressive.001', { loop: true, trim: [f(49), f(67)], strideFromTravel: true, center: true }],
+  ['headshot', MAX + '#Headshot reaction.001', { trim: [f(48), f(114)], speed: 3.5 }],
+  ['bolt', MAX + '#Sniper bolt action.001', { trim: [f(14), f(70)], speed: 2.2 }],
+  // Hard landing standing still: lower-body absorb.
   ['hardLand', A + 'hard landing', { trim: [f(8), f(48)], speed: 2 }],
   // Hit reactions: front (Basic Shooter) and large flinches from the left / back, mirrored for the right.
   ['hitFront', S + 'hit reaction', {}],
@@ -304,13 +327,25 @@ if (cmd === 'catalog') {
   const rest = sourceRest(dir);
   for (const n of ['Hips', 'Spine2', 'LeftArm', 'LeftForeArm', 'LeftUpLeg', 'LeftFoot', 'Head']) console.log(n, 'src', rest.p[CHILD[n]].clone().sub(rest.p[n]).normalize().toArray().map(v => v.toFixed(2)).join(','), 'robot', robotDir(n).toArray().map(v => v.toFixed(2)).join(','));
   console.log('src hipY', rest.p.Hips.y.toFixed(2), 'robot hipY', ROBOT_HIP_Y.toFixed(3));
+} else if (cmd === 'glb') {
+  // every animation of one GLB, whole and unlooped, named after the animation
+  const file = path.resolve(dir), names = readGlbJson(file).animations.map(x => x.name), clips = {};
+  for (const name of names) {
+    const key = name.replace(/\.001$/, '').replace(/[^A-Za-z0-9]+/g, '_').replace(/^_|_$/, '');
+    clips[key] = bake(sampleGlb(file + '#' + name), {});
+    clips[key].source = path.basename(file) + '#' + name;
+    console.error(key.padEnd(52), String(clips[key].frames).padStart(4), 'frames');
+  }
+  fs.writeFileSync(outFile, JSON.stringify({ fps: FPS, bones: BONES, restHip: P0.Hips.toArray(), clips }));
+  console.error('wrote', outFile, (fs.statSync(outFile).size / 1024).toFixed(0), 'KB');
 } else if (cmd === 'bake') {
   const clips = {};
   for (const [name, file, opt] of PICKS) {
     const glbSrc = file.includes('.glb#');
     clips[name] = bake(glbSrc ? sampleGlb(path.join(dir, file)) : sample(dir, path.join(dir, file + '.fbx')), opt);
     clips[name].source = glbSrc ? file : file + '.fbx';
-    console.error(name.padEnd(11), String(clips[name].frames).padStart(3), 'frames, stride', clips[name].stride, 'travel', clips[name].travel, 'sync', clips[name].sync, '<-', file);
+    console.error(name.padEnd(11), String(clips[name].frames).padStart(3), 'frames, stride', clips[name].stride, 'travel', clips[name].travel, 'sync', clips[name].sync, 'net hip', clips[name].hipDist, 'm @', clips[name].hipDir, 'deg, planted feet @', clips[name].footDir, 'deg', '<-', file);
+    delete clips[name].hipDir; delete clips[name].hipDist; delete clips[name].footDir;
   }
   fs.writeFileSync(outFile, JSON.stringify({ fps: FPS, bones: BONES, restHip: P0.Hips.toArray(), clips }));
   console.error('wrote', outFile, (fs.statSync(outFile).size / 1024).toFixed(0), 'KB');

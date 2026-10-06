@@ -323,7 +323,7 @@ export class CharacterRenderer {
     return c;
   }
 
-  hurt(id: number, dirX: number, dirZ: number) {
+  hurt(id: number, dirX: number, dirZ: number, _head?: boolean) {
     const c = this.chars.get(id);
     if (!c) return;
     c.hurtT = 0.22;

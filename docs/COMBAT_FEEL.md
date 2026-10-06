@@ -18,8 +18,8 @@ through the real `RobotRenderer` (`poselab.html`) found the causes:
    no weapon in them: the splayed hands in the recording. It now has a guard stance, swing clips and a
    pencil model in the hand (see below).
 3. **Crouch looked like sitting.** It used the sword-and-shield crouch idle, a deep squat with elbows on
-   the knees. Crouch is now the relaxed upright stance dropped at the hips; the two-bone leg IK bends the
-   knees and keeps the feet planted, the same path crouch-walking already used.
+   the knees. Crouch now uses Max's crouch-walk clips (second pass, below); without them it falls back to
+   the upright stance dropped at the hips with the two-bone leg IK bending the knees.
 4. **The idle was a deep, bladed rifle stance** for the whole body. The legs and spine now use the Locomotion Pack
    idle, an upright relaxed stance. The arms still go onto the weapon through IK.
 
@@ -28,8 +28,8 @@ through the real `RobotRenderer` (`poselab.html`) found the causes:
 | Feature | Where | Notes |
 |---|---|---|
 | **Dodge roll** | sim `rollTimer` (`src/sim/movement.ts`), `MOVE.rollTime` 0.5 s, `MOVE.rollLowTime` 0.36 s | A ground dash is a roll in the dash direction. Body tucks: hitboxes use the crouch profile (head 1.60 m to 0.95 m) for the first 0.36 s. Air dashes, jumping and sliding never roll; jumping out of a roll cancels it. Movement distances and charges are unchanged. |
-| Roll animation | `roll` clip, full body, gun rides in the hand | faces the dash direction, so a left dash rolls left |
-| Landing roll / heavy landing | `rollLand`, `hardLand` clips | fall speed > 9 m/s while moving: tuck and roll (visual only, no speed loss). Fall > 12 m/s standing: deep lower-body absorb |
+| Roll animation | `roll`, `rollL`, `rollR`, `sideDive` clips (Max's), full body, gun rides in the hand | the clip follows the dash direction relative to the aim: forward = forward roll, sideways = side roll while still facing the aim, backward = back dive |
+| Landing roll / heavy landing | `roll`, `hardLand` clips | fall speed > 9 m/s while moving: tuck and roll (visual only, no speed loss). Fall > 12 m/s standing: deep lower-body absorb |
 | **Hit reactions** | `hitFront/L/R/Back` clips plus a bullet-direction torso jerk | direction comes from the bullet vs the fighter's facing |
 | **Death** | `death` clip | plays facing the shooter, replaces the tip-over |
 | **Melee ("Pencil")** | `meleeGuard`, `meleeLight`, `meleeLightB`, `meleeHeavy` | light = alternating cuts, heavy = lunging stab timed so the thrust lands at the 0.3 s windup. Procedural 3D pencil in the right hand |
@@ -41,38 +41,61 @@ Tuning knobs: `MOVE.rollTime`, `MOVE.rollLowTime` (set it to 0 to remove the low
 paths, and the `PICKS` table in `tools/anim/bake-robot.mjs` for every clip (then re-run the bake commands
 in `ANIMATION_SOURCES.md`).
 
+## Second pass: Max's "Update all animations" pack
+
+Max's 16-clip Tripo export (`Max/all.glb`) is baked in and wired up. What each clip does in the game:
+
+| Clip | Where it plays |
+|---|---|
+| Armed rifle roll, side dodge rolls left and right, sideways dive | The dodge roll, chosen from the dash direction relative to the aim (forward / left / right / back). Sideways rolls keep the body facing the aim. The forward roll is also the landing roll |
+| Crouch walk forward, back, left, right | Crouch locomotion, blended in as the stance lowers; the first frame is the crouch idle. Cadence is capped so Tripo's short steps do not run in fast forward at crouch speed |
+| Slide with a rifle | A held squat while sliding, and the stand-up when the slide ends. Procedural hip drop and foot IK are bypassed |
+| Sprinting with a rifle | Full-speed forward run (replaces the Mixamo sprint) |
+| Walking with a sniper, aimed-down-sights walking | The sniper carry walk and scoped sidestep, re-cut from the new export (one gait cycle each) |
+| Headshot reaction | A hit that lands on the head plays this instead of the directional flinch, plus a procedural head throw |
+| Sniper bolt action | Chest and head motion while the bolt cycles (the hands stay on the weapon IK) |
+| Running / sprinting empty handed | Not used: one cannot loop and the other is a character standing still |
+
+First person: Max's crouch clips lean the head and shoulders well forward of the hips, which put the chest in the
+camera. The local body is now slid back (up to 0.45 m) and down (up to 0.4 m) so the head sits over the
+camera like a standing head does; the arms, gun IK and bolt/reload hand paths are solved from the shifted
+body. Third-person is unaffected.
+
+The Mixamo roll, landing roll and crouch idle they replace are gone from the bake, so the clip files stay
+around 1.1 MB per character. `tools/anim/loops.mjs` and `windows.mjs` are the tools that found each clip's
+window; `bake-robot.mjs glb` bakes a whole file for them.
+
 ## Verification
 
 * `npm test`, `npm run test:movement` (five new roll checks), `npm run test:upgrade`, `npm run build`.
-* Pose sheets of the real renderer: `poselab.html?set=stance|melee|roll|react|moves&view=side` on both rigs.
+* Pose sheets of the real renderer: `poselab.html?set=stance|crouchwalk|melee|roll|rolldirs|react|walks|moves&view=side` on both rigs.
 * In-game frame captures through the deterministic stepper: run, roll, melee (third and first person),
   hit, death, hard and rolling landings.
 * Not measured: frame rate on real hardware (this container has no GPU). The additions are one extra
   mesh per melee fighter, a few more clips sampled per fighter, and nothing per frame beyond that. The
-  clip file grew from about 0.4 MB to 0.8 MB per character (the 8-second upright idle is the largest clip).
+  clip file grew from about 0.4 MB to 1.1 MB per character (the 8-second upright idle and the 2-3 s rolls are the largest clips).
 
 ## Known limitations
 
-* The roll is a forward tumble turned toward the dash direction, so a backward dash tumbles backward in
-  the same forward-roll motion rather than a true back-roll.
+* There is no true back-roll: a backward dash uses Max's sideways dive (it dives back and to one side).
 * Roll and death clips are full body with no IK, so feet can float or sink a few centimetres on slopes.
 * Hit reactions drive only the spine, neck and head: the arms stay on the gun so aim stays readable.
-* Slide is still the procedural pose (hips drop, legs IK to the slide ankles, lean back).
+* The slide is Max's squat held while sliding: feet are flat under the hips rather than extended out front.
+* Crouch strafes are slow clips: at crouch speed their feet slide a little (cadence is capped, not stretched).
 * Third-person melee uses sword-and-shield clips, so the pencil is gripped like a sword. A purpose-made
   pencil set (below) would look better.
 
-## Animations worth generating (Tripo text to animation)
+## Animations still worth generating (Tripo text to animation)
 
-Tripo exports on the robot's rig import unchanged (that is how Max's sniper walk worked). Each prompt
-should say in place, no travel, and loop where noted. In rough order of value:
+Tripo exports on the robot's rig import unchanged (that is how Max's clips work). Each prompt should say in
+place, no travel, and loop where noted. In rough order of value now that slide, rolls, crouch walks, bolt
+and headshot are in:
 
-1. **Slide**: "A soldier sliding on the ground feet first, leaning back, one leg extended and one knee bent, holding a rifle in both hands pointing forward. In place, hold the pose with a slight sway. Loop."
-2. **Side dodge rolls** (left and right, with a rifle): "A soldier does a quick sideways dodge roll to the left holding a rifle close to the chest and comes up in a ready stance. In place, 0.8 seconds."
-3. **Crouch walk with rifle** (forward, back, left, right): "A soldier crouch-walking forward in a low stance, rifle held at the shoulder pointing forward, torso upright. In place, one step cycle, loop."
-4. **Pencil melee**: "A fighter holding a pencil like a short sword does a fast horizontal slash from right to left. In place, 0.5 seconds." Plus "a fast backhand slash back from left to right", "a lunging stab straight ahead with the pencil, step forward and recover", and "a stealthy backstab: step behind and drive the pencil down".
-5. **Sniper bolt action**: "A soldier cycles the bolt of a sniper rifle: pull back sharply, push forward, lock down, then settles back into aiming. Upper body only, 1 second."
-6. **Air dash and double jump**: "A soldier air dashing forward, body leaning almost horizontal, legs trailing, rifle held in both hands" and "a soldier does a second mid-air jump with a quick forward flip, tucked, then opens up to fall."
-7. **Headshot reaction and death variants**: "Head snaps back from a bullet hit, the soldier staggers one step back", "falls backward after a headshot and lies still", "collapses forward onto knees then face down".
-8. **Weapon switching**: "A soldier lowers a rifle and draws a pistol from the hip in half a second", "slings the rifle onto the back and raises a sniper rifle to the shoulder".
-9. **Vault and mantle**: "A soldier vaults over a waist-high wall in one fluid motion" and "climbs onto a ledge at chest height."
-10. **Emotes / victory**: "A soldier spins a rifle in the hand and holds it up in victory."
+1. **Pencil melee**: "A fighter holding a pencil like a short sword does a fast horizontal slash from right to left. In place, 0.5 seconds." Plus "a fast backhand slash back from left to right", "a lunging stab straight ahead with the pencil, step forward and recover", and "a stealthy backstab: step behind and drive the pencil down". Melee still uses sword-and-shield clips.
+2. **Air dash and double jump**: "A soldier air dashing forward, body leaning almost horizontal, legs trailing, rifle held in both hands" and "a soldier does a second mid-air jump with a quick forward flip, tucked, then opens up to fall."
+3. **Death variants**: "falls backward after a headshot and lies still", "collapses forward onto knees then face down", "spins and falls to the side after a shot to the leg".
+4. **Weapon switching**: "A soldier lowers a rifle and draws a pistol from the hip in half a second", "slings the rifle onto the back and raises a sniper rifle to the shoulder".
+5. **Reloads**: "A soldier reloads an assault rifle: drops the magazine, pulls a fresh one from the belt, slaps it in, and racks the charging handle. Upper body only, 2 seconds." (the current reload is the weapon IK only)
+6. **Landing and falling**: "A soldier lands from a long fall into a deep crouch with one hand on the ground, then rises" and "a soldier falling through the air, arms out, legs bent, loop".
+7. **Vault and mantle**: "A soldier vaults over a waist-high wall in one fluid motion" and "climbs onto a ledge at chest height."
+8. **Emotes / victory**: "A soldier spins a rifle in the hand and holds it up in victory."

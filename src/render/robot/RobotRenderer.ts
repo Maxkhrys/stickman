@@ -327,6 +327,13 @@ interface RobotState {
   rollDir: number;
   rollKind: 'dash' | 'land';
   hitClip: string;
+  hurtDur: number;
+  /** which roll clip plays, and whether the body keeps facing the aim (side rolls) or the dash direction */
+  rollClip: string;
+  rollSide: boolean;
+  /** slide: ramp-in, and the stand-up that plays when it ends (-1 = none) */
+  slideT: number;
+  slideExitT: number;
   /** melee swing: seconds into the clip (-1 = none), which clip, the last swing time seen, alternating side */
   meleeT: number;
   meleeClip: string;
@@ -356,6 +363,10 @@ export interface RobotViewOptions {
 }
 
 const HURT_TIME = 0.42;
+/** a headshot snaps the head back for longer */
+const HEAD_HURT_TIME = 0.66;
+/** gait cycles per second never exceed these, so slow clips at high speed slide a little instead of running in fast forward */
+const MAX_CYCLES = { stand: 3.4, crouch: 2.3 };
 /** seconds a dash roll / landing roll plays for */
 const ROLL_TIME = { dash: MOVE.rollTime, land: 0.62 };
 const BLEND_SPEED = { walk: 1.6, run: 3.8, sprint: 5.6 };
@@ -448,7 +459,7 @@ export class RobotRenderer {
       rest: bones.map((x) => x.quaternion.clone()),
       hipRest: b.Hips.position.clone(),
       phase: 0, facing: f.yaw, guns: {}, gunKey: null,
-      wasGround: true, landT: 9, airT: 0, hurtT: 0, hurtX: 0, hurtZ: 0, rollT: -1, rollDir: 0, rollKind: 'dash', hitClip: 'hitFront', meleeT: -1, meleeClip: 'meleeLight', meleeSeen: -99, meleeFlip: false, hardT: -1, pencil: null,
+      wasGround: true, landT: 9, airT: 0, hurtT: 0, hurtX: 0, hurtZ: 0, rollT: -1, rollDir: 0, rollKind: 'dash', hitClip: 'hitFront', hurtDur: 0.42, rollClip: 'roll', rollSide: false, slideT: 0, slideExitT: -1, meleeT: -1, meleeClip: 'meleeLight', meleeSeen: -99, meleeFlip: false, hardT: -1, pencil: null,
       dead: false, deadT: 0, deathDir: new THREE.Vector3(), lastShot: -99,
       sk: createSkeleton(), head: new THREE.Vector3(), visibleLast: true, lod: false,
     };
@@ -457,17 +468,18 @@ export class RobotRenderer {
     return c;
   }
 
-  hurt(id: number, dirX: number, dirZ: number) {
+  hurt(id: number, dirX: number, dirZ: number, head = false) {
     const c = this.chars.get(id);
     if (!c) return;
-    c.hurtT = HURT_TIME;
+    c.hurtDur = head && this.A.chars[c.key].lib.clips.headshot ? HEAD_HURT_TIME : HURT_TIME;
+    c.hurtT = c.hurtDur;
     c.hurtX = dirX;
     c.hurtZ = dirZ;
     // pick the reaction from where the shot came from (bullet direction vs the fighter's facing)
     const sy = Math.sin(c.facing), cy = Math.cos(c.facing);
     const along = -(dirX * -sy + dirZ * -cy); // >0: bullet travels against facing = hit from the front
     const side = dirX * cy - dirZ * sy;
-    c.hitClip = Math.abs(side) > Math.abs(along) ? (side > 0 ? 'hitL' : 'hitR') : along > 0 ? 'hitFront' : 'hitBack';
+    c.hitClip = c.hurtDur === HEAD_HURT_TIME ? 'headshot' : Math.abs(side) > Math.abs(along) ? (side > 0 ? 'hitL' : 'hitR') : along > 0 ? 'hitFront' : 'hitBack';
   }
 
   kill(f: Fighter, dir: Vec3, _headshot: boolean) {
@@ -594,11 +606,20 @@ export class RobotRenderer {
       add(L.walkF, wF * walkT); add(L.walkB, wB * walkT); add(L.walkL, wLt * walkT); add(L.walkR, wR * walkT);
     }
     add(L.runF, wF * runT * (1 - sprintT / Math.max(wF, 1e-3))); add(L.runB, wB * runT); add(L.runL, wLt * runT); add(L.runR, wR * runT);
-    add(L.sprint, sprintT * runT);
-    // phase: advance by distance over the blended cycle length so feet stay planted
+    add(L.sprintRifle ?? L.sprint, sprintT * runT);
+    // crouching swaps the whole family for Max's crouch walks (the stance fades in with the height)
+    const crouchW = L.crouchF ? crouch : 0;
+    if (crouchW > 0) {
+      for (const e of set) e[1] *= 1 - crouchW;
+      add(L.crouchF, wF * crouchW); add(L.crouchB, wB * crouchW); add(L.crouchL, wLt * crouchW); add(L.crouchR, wR * crouchW);
+    }
+    // phase: advance by distance over the blended cycle length so feet stay planted (capped, see MAX_CYCLES)
     let cycle = 0, wsum = 0;
     for (const [clip, w] of set) { cycle += w * clip.stride * ROBOT_SCALE * clip.duration; wsum += w; }
-    if (wsum > 0 && cycle > 1e-3) c.phase = (c.phase + (speed * dt) / (cycle / wsum)) % 1;
+    if (wsum > 0 && cycle > 1e-3) {
+      const cps = Math.min(speed / (cycle / wsum), MAX_CYCLES.stand + (MAX_CYCLES.crouch - MAX_CYCLES.stand) * crouchW);
+      c.phase = (c.phase + cps * dt) % 1;
+    }
 
     // air / landing
     if (!f.onGround) c.airT += dt; else c.airT = 0;
@@ -606,13 +627,23 @@ export class RobotRenderer {
       c.landT = 0;
       // hard landing while moving: tuck into a roll instead of a squash
       const hs = Math.hypot(f.vel.x, f.vel.z);
-      if (f.lastLandSpeed > 9 && hs > 3.5 && c.rollT < 0 && !f.sliding) { c.rollT = 0; c.rollKind = 'land'; c.rollDir = Math.atan2(-f.vel.x, -f.vel.z); }
+      if (f.lastLandSpeed > 9 && hs > 3.5 && c.rollT < 0 && !f.sliding) { c.rollT = 0; c.rollKind = 'land'; c.rollClip = 'roll'; c.rollSide = false; c.rollDir = Math.atan2(-f.vel.x, -f.vel.z); }
       else if (f.lastLandSpeed > 12 && !f.crouching && L.hardLand) c.hardT = 0;
     }
     c.wasGround = f.onGround;
     // ground dash = dodge roll toward the dash direction (the sim owns its timer); a hard landing at speed
     // tucks into a short visual-only roll
     if (f.rollTimer > 0) {
+      if (c.rollKind !== 'dash' || c.rollT < 0) {
+        // a fresh dodge: pick the clip from the dash direction relative to where the fighter aims. Forward
+        // dashes tumble along the dash; sideways ones keep facing the aim and use the side rolls; backward ones dive
+        const fwd = -f.dashDirX * sy - f.dashDirZ * cy, rgt = f.dashDirX * cy - f.dashDirZ * sy;
+        const a = Math.atan2(rgt, fwd);
+        if (L.rollL && L.rollR && Math.abs(a) > 0.87) {
+          c.rollSide = true;
+          c.rollClip = Math.abs(a) > 2.2 && L.sideDive ? (a > 0 ? 'sideDive' : 'sideDiveL') : a > 0 ? 'rollR' : 'rollL';
+        } else { c.rollSide = false; c.rollClip = 'roll'; }
+      }
       c.rollKind = 'dash';
       c.rollT = MOVE.rollTime - f.rollTimer;
       c.rollDir = Math.atan2(-f.dashDirX, -f.dashDirZ);
@@ -624,13 +655,24 @@ export class RobotRenderer {
     const rolling = c.rollT >= 0 && !c.dead;
     // whole-body clip override: roll while rolling, death clip once dead
     const dying = c.dead;
-    const override: Clip | null = dying ? (L.death ?? null) : rolling ? (c.rollKind === 'dash' ? L.roll : L.rollLand) ?? null : null;
+    const override: Clip | null = dying ? (L.death ?? null) : rolling ? L[c.rollClip] ?? L.roll ?? null : null;
     const overrideU = dying ? clamp01(c.deadT / (override ? override.duration : 1)) : clamp01(c.rollT / ROLL_TIME[c.rollKind]);
-    if (rolling) c.root.rotation.set(0, c.rollDir + Math.PI, 0);
+    if (rolling) c.root.rotation.set(0, (c.rollSide ? c.facing : c.rollDir) + Math.PI, 0);
     if (dying) c.root.rotation.set(0, Math.atan2(-c.deathDir.x, -c.deathDir.z), 0);
     c.landT += dt;
     c.hurtT = Math.max(0, c.hurtT - dt);
     if (c.hardT >= 0) { c.hardT += dt; if (!f.onGround || c.hardT >= (L.hardLand?.duration ?? 0)) c.hardT = -1; }
+    // slide: ease into the held squat, and stand up out of it when the slide ends
+    if (f.sliding && f.onGround) { c.slideT = Math.min(1, c.slideT + dt / 0.12); c.slideExitT = -1; }
+    else {
+      if (c.slideT > 0.5 && f.onGround && L.slideExit) c.slideExitT = 0;
+      c.slideT = 0;
+      if (c.slideExitT >= 0) { c.slideExitT += dt; if (c.slideExitT >= (L.slideExit?.duration ?? 0) || !f.onGround) c.slideExitT = -1; }
+    }
+    const slideW = L.slideHold && f.sliding ? smooth01(c.slideT) : 0;
+    const exitU = c.slideExitT >= 0 && L.slideExit ? c.slideExitT / L.slideExit.duration : -1;
+    const exitW = exitU >= 0 ? 1 - smooth01(exitU) : 0;
+    const baseW = Math.max(0, 1 - slideW - exitW);
 
     const acc = this.acc;
     acc.reset();
@@ -653,11 +695,14 @@ export class RobotRenderer {
       L.reach.accumulate(0.5, (1 - rise) * (1 - fall), acc, this.lowerMask);
       L.fall.accumulate((c.airT * 0.8) % 1, fall, acc, this.lowerMask);
     } else {
-      const idleW = (1 - moveW) * lowerW;
-      // crouching is the upright stance dropped at the hips; the leg IK below bends the knees
-      standIdle.accumulate(idleU, idleW, acc, this.lowerMask);
-      for (const [clip, w] of set) clip.accumulate(c.phase + clip.sync, (w / (wsum || 1)) * moveW * lowerW, acc, this.lowerMask);
-      if (c.landT < 0.22) L.land.accumulate(c.landT / 0.22, 0.6 * (1 - c.landT / 0.22), acc, this.lowerMask);
+      const idleW = (1 - moveW) * lowerW * baseW;
+      // crouching: Max's crouch pose at rest (without those clips: the upright stance dropped at the hips, below)
+      standIdle.accumulate(idleU, idleW * (1 - crouchW), acc, this.lowerMask);
+      if (crouchW > 0) L.crouchIdle.accumulate(0, idleW * crouchW, acc, this.lowerMask);
+      for (const [clip, w] of set) clip.accumulate(c.phase + clip.sync, (w / (wsum || 1)) * moveW * lowerW * baseW, acc, this.lowerMask);
+      if (c.landT < 0.22) L.land.accumulate(c.landT / 0.22, 0.6 * (1 - c.landT / 0.22) * baseW, acc, this.lowerMask);
+      if (slideW > 0) L.slideHold.accumulate(0.5, slideW, acc, this.lowerMask);
+      if (exitW > 0) L.slideExit.accumulate(exitU, exitW, acc, this.lowerMask);
     }
     // upper body: relaxed upright idle (the IK pass puts the hands on the actual weapon); melee and hit reactions layer on top
     if (!override) {
@@ -694,11 +739,17 @@ export class RobotRenderer {
         c.meleeT = -1;
         standIdle.accumulate(idleU, 1, acc, this.upperMask);
       }
+      // sniper bolt: Max's bolt-cycle clip nods the chest and head along with the hands' IK
+      const boltSlot = f.weapons[f.cur];
+      if (def.bolt && L.bolt && boltSlot.boltLeft > 0 && boltSlot.boltLeft <= def.bolt.time) {
+        const bu = 1 - boltSlot.boltLeft / def.bolt.time;
+        L.bolt.accumulate(bu, Math.sin(bu * Math.PI) * 0.8, acc, this.chestMask);
+      }
       // hit reaction: the matching flinch clip drives spine, neck and head (arms stay on the gun)
       if (c.hurtT > 0 && L[c.hitClip]) {
-        const u = 1 - c.hurtT / HURT_TIME;
-        const long = c.hitClip !== 'hitFront';
-        L[c.hitClip].accumulate(u * (long ? 0.45 : 1), Math.sin(Math.min(1, u * 1.15) * Math.PI) * 0.7, acc, this.torsoMask);
+        const u = 1 - c.hurtT / c.hurtDur;
+        const long = c.hitClip !== 'hitFront' && c.hitClip !== 'headshot';
+        L[c.hitClip].accumulate(u * (long ? 0.45 : 1), Math.sin(Math.min(1, u * 1.15) * Math.PI), acc, this.torsoMask);
       }
     }
     // reload body motion (arms are re-targeted below, but the torso dips with the clip)
@@ -712,16 +763,35 @@ export class RobotRenderer {
 
     // ---- hips height: crouch / slide drop (legs re-solved with IK below) ----
     buildSkeleton({ pos: { x: px, y: py, z: pz }, vel: f.vel, yaw, pitch, lowerYaw: c.facing, height, gait: f.gait, onGround: f.onGround, sliding: f.sliding, ads }, weapon, c.sk);
-    let hipDrop = (crouch * 0.3) / ROBOT_SCALE;
-    if (f.sliding) hipDrop = 0.48 / ROBOT_SCALE;
+    // Max's crouch and slide clips carry their own hip height and foot placement; without them, drop the hips and re-plant the feet with IK
+    let hipDrop = L.crouchF ? 0 : (crouch * 0.3) / ROBOT_SCALE;
+    if (f.sliding && !L.slideHold) hipDrop = 0.48 / ROBOT_SCALE;
+    const legIK = hipDrop > 1e-4 || (f.sliding && !L.slideHold);
     if (!override) c.b.Hips.position.y -= hipDrop;
     // landing squash
     if (!override && c.landT < 0.25 && f.onGround) c.b.Hips.position.y -= Math.sin((c.landT / 0.25) * Math.PI) * Math.min(0.08, f.lastLandSpeed * 0.008) / ROBOT_SCALE;
 
     c.root.updateMatrixWorld(true);
 
+    // first person: the camera sits in the head, but the clips lean the head and shoulders out in front of the hips
+    // (the crouch walk most of all), which puts the chest in the lens. Slide the body back until the head is over
+    // the camera; the arms, IK and gun below are all solved from the shifted body
+    if (!override && f.alive && f.id === view.hideHeadOf) {
+      c.b.Head.getWorldPosition(tv);
+      const sx = px - tv.x, sz = pz - tv.z, sl = Math.hypot(sx, sz);
+      // and if the head rides higher than a standing head does (0.16 m under the eye), sink the body: the feet are never seen from the head
+      const sy2 = Math.max(-0.4, Math.min(0, py + height - MOVE.eyeFromTop - 0.16 - tv.y));
+      if (sl > 1e-4 || sy2 < -1e-4) {
+        const k = sl > 1e-4 ? Math.min(1, 0.45 / sl) : 0;
+        c.root.position.x += sx * k;
+        c.root.position.z += sz * k;
+        c.root.position.y += sy2;
+        c.root.updateMatrixWorld(true);
+      }
+    }
+
     // ---- legs: keep the clip's feet on the ground after the hips moved ----
-    if (!override && f.onGround && (hipDrop > 1e-4 || f.sliding)) {
+    if (!override && f.onGround && legIK) {
       for (const side of ['Left', 'Right'] as const) {
         const up = c.b[`${side}UpLeg`], lo = c.b[`${side}Leg`], foot = c.b[`${side}Foot`];
         const target = foot.getWorldPosition(new THREE.Vector3());
@@ -736,10 +806,10 @@ export class RobotRenderer {
     const spineBones = [c.b.Spine, c.b.Spine1, c.b.Spine2];
     const right = tv.set(Math.cos(c.facing), 0, -Math.sin(c.facing)).clone();
     const fwd = new THREE.Vector3(-Math.sin(c.facing), 0, -Math.cos(c.facing));
-    const lean = f.sliding ? -0.35 : 0;
+    const lean = f.sliding ? (L.slideHold ? -0.12 : -0.35) : 0;
     // a hit jerks the torso along the bullet's direction on top of the flinch clip (peaks early, settles)
-    const hitU = c.hurtT > 0 ? 1 - c.hurtT / HURT_TIME : 1;
-    const flinch = c.hurtT > 0 ? Math.sin(Math.min(1, hitU * 1.6) * Math.PI) * 0.28 : 0;
+    const hitU = c.hurtT > 0 ? 1 - c.hurtT / c.hurtDur : 1;
+    const flinch = c.hurtT > 0 ? Math.sin(Math.min(1, hitU * 1.6) * Math.PI) * 0.42 : 0;
     if (!override) for (const sb of spineBones) {
       tq.setFromAxisAngle(right, (pitch + lean) / 3);
       rotateWorld(sb, tq);
@@ -879,6 +949,11 @@ export class RobotRenderer {
     c.b.Neck.updateWorldMatrix(true, false);
     tq.setFromAxisAngle(right, pitch * 0.3);
     if (!override) rotateWorld(c.b.Head, tq);
+    if (!override && c.hurtT > 0 && c.hitClip === 'headshot') {
+      // a headshot throws the head back along the bullet's direction
+      tq.setFromAxisAngle(tv2.set(c.hurtZ, 0, -c.hurtX).normalize(), Math.sin(Math.min(1, (1 - c.hurtT / c.hurtDur) * 1.8) * Math.PI) * 0.6);
+      rotateWorld(c.b.Head, tq);
+    }
     const hideHead = f.id === view.hideHeadOf && f.alive;
     c.b.Head.scale.setScalar(hideHead ? 0.001 : 1);
 

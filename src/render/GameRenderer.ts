@@ -28,7 +28,7 @@ export interface CharacterView {
   readonly group: THREE.Group;
   reset(): void;
   wound(id: number, pos: { x: number; y: number; z: number }, yaw: number): void;
-  hurt(id: number, dirX: number, dirZ: number): void;
+  hurt(id: number, dirX: number, dirZ: number, head?: boolean): void;
   kill(f: Fighter, dir: { x: number; y: number; z: number }, headshot: boolean): void;
   headOf(id: number): THREE.Vector3 | null;
 }

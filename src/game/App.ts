@@ -280,7 +280,7 @@ export class App {
             R.effects.burst(tv, head ? 0xffd23f : ink, head ? 8 : 5, 3.5, 0.05, 0.4, 1, tv2);
             R.effects.burst(tv, 0x1b1b24, 3, 2.5, 0.04, 0.4, 1, tv2);
           }
-          R.characters.hurt(e.victim, e.dir.x, e.dir.z);
+          R.characters.hurt(e.victim, e.dir.x, e.dir.z, head);
         }
         if (e.attacker === local) {
           if (e.blocked) {

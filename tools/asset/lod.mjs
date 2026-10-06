@@ -4,7 +4,7 @@
 // of positions/UVs. meshoptimizer keeps UV seams intact; 'Prune' drops tiny detached bits.
 //
 //   node tools/asset/lod.mjs <ratio> <maxRelativeError> file.glb [file.glb ...]
-//   (shipped: characters 0.15 0.01, weapons 0.12 0.01)
+//   (shipped: 0.12 0.03 for characters and weapons)
 //
 // Output: uint32 count, then count uint32 indices (one primitive per GLB; the tool refuses others).
 import fs from 'node:fs';

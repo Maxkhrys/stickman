@@ -2,7 +2,7 @@
 //  MOVEMENT TUNING. Units are metres / seconds. Every movement rule reads from here.
 //  Feel target: Deadlock-style traversal (momentum, double jump, directional dashes,
 //  slides) under a readable third-person shooter (Rogue Company presentation).
-//  Values are mutable so the dev tuning panel (?tune=1) can edit them live.
+//  Values are mutable so tests and dev tools can adjust them at runtime.
 // ============================================================================
 export const MOVE = {
   // ---- body ----

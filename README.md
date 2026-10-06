@@ -24,11 +24,14 @@ Or import the repo in the Vercel dashboard. No settings needed.
 
 | | |
 |---|---|
-| WASD | move (air-strafe by turning while holding A/D) |
-| Space | jump — hold to bunny hop (jump buffer + coyote time) |
-| Shift | crouch; while running = slide with speed boost (slide-hop to keep it) |
-| LMB / RMB | fire / aim down sights (knife: quick slash / heavy stab, lunges at close targets, backstabs) |
-| R, 1–4, wheel | reload, weapons (range: 4 slots with instant switching) |
+| WASD | move |
+| Space | jump; press again in the air for the air jump (jump buffer + coyote time) |
+| Shift | dash (2 charges, one in the air per airtime) |
+| C | crouch; while running = momentum slide |
+| LMB / RMB | fire / aim down sights (sniper: scope in ~150 ms, one shot per press) |
+| R, 1–4, wheel | reload, weapons |
+| Q / V | swap shoulder / first-third person |
+| T | reset practice |
 | H | toggle hit-region overlay (practice range) |
 | Tab / Esc | scoreboard / pause |
 
@@ -48,6 +51,10 @@ Tests: `npm test` (simulation suite), `npm run test:upgrade` (armory/objective/c
 is a viewmodel inspection harness.
 
 Weapon tuning lives in `src/config/weapons.ts`; movement in `src/config/movement.ts`.
+
+The sniper & movement upgrade (Foundry map, armored character, shoulder camera, ADS into the sights)
+is documented in [docs/SNIPER_UPGRADE.md](docs/SNIPER_UPGRADE.md); clip sources in
+[docs/ANIMATION_SOURCES.md](docs/ANIMATION_SOURCES.md).
 Architecture and the multiplayer plan: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Armory update
